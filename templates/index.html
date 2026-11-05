@@ -1,0 +1,401 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hệ thống đếm bu lông và ốc vít</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px;
+            font-family: Arial, sans-serif;
+            background: #f3f5f8;
+            color: #202938;
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+            gap: 20px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 10px #0000000d;
+            min-width: 0;
+        }
+
+        .video {
+            display: block;
+            width: 100%;
+            min-height: 220px;
+            background: #151a22;
+            border-radius: 8px;
+            object-fit: contain;
+        }
+
+        .buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        button {
+            padding: 11px 16px;
+            border: 0;
+            border-radius: 7px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .start {
+            background: #16794b;
+            color: white;
+        }
+
+        .stop {
+            background: #c63b3b;
+            color: white;
+        }
+
+        .count {
+            background: #235bc5;
+            color: white;
+        }
+
+        .save {
+            background: #475569;
+            color: white;
+        }
+
+        .total {
+            font-size: 38px;
+            font-weight: bold;
+            margin: 8px 0 20px;
+        }
+
+        .item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 13px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .number {
+            font-weight: bold;
+            font-size: 20px;
+        }
+
+        .status {
+            margin-top: 12px;
+            padding: 10px 12px;
+            background: #f1f5f9;
+            border-radius: 7px;
+            overflow-wrap: anywhere;
+        }
+
+        .result-section {
+            margin-top: 24px;
+        }
+
+        .result-image {
+            display: block;
+            width: 100%;
+            border-radius: 8px;
+            background: #151a22;
+        }
+
+        .hint {
+            color: #64748b;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 760px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            body {
+                padding: 12px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Hệ thống nhận diện và đếm linh kiện</h1>
+    <p>Camera USB · YOLO · Flask</p>
+
+    <div class="layout">
+        <section class="panel">
+            <h2>Camera trực tiếp</h2>
+
+            <img
+                class="video"
+                id="camera"
+                src="/video_feed"
+                alt="Hình ảnh camera trực tiếp"
+            >
+
+            <div class="buttons">
+                <button class="start" id="startCameraBtn"
+                        onclick="startCamera()">
+                    Bật camera
+                </button>
+
+                <button class="count" id="startCountBtn"
+                        onclick="startCount()" disabled>
+                    Bắt đầu đếm
+                </button>
+
+                <button class="stop" onclick="stopCamera()">
+                    Dừng camera
+                </button>
+
+                <button class="save" onclick="saveImage()">
+                    Lưu ảnh hiện tại
+                </button>
+            </div>
+
+            <p class="status" id="cameraStatus">
+                Camera: Đã dừng
+            </p>
+
+            <p class="status" id="sessionStatus">
+                Phiên đếm: Sẵn sàng
+            </p>
+
+            <p id="message" aria-live="polite"></p>
+
+            <div class="result-section">
+                <h3>Ảnh kết quả phiên đếm gần nhất</h3>
+
+                <img
+                    id="resultImage"
+                    class="result-image"
+                    alt="Ảnh kết quả nhận diện"
+                    hidden
+                >
+
+                <p id="resultPlaceholder" class="hint">
+                    Ảnh có bounding box sẽ xuất hiện sau khi hoàn tất đếm.
+                </p>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>Kết quả đếm</h2>
+
+            <p>Tổng số linh kiện</p>
+            <div class="total" id="total">0</div>
+
+            <div id="counts">
+                <p>Chưa có kết quả nhận diện.</p>
+            </div>
+
+            <p class="hint">
+                Kết quả được tính riêng cho từng phiên đếm.
+                Các frame của cùng một phiên được đối chiếu để
+                hạn chế đếm trùng.
+            </p>
+        </section>
+    </div>
+
+    <script>
+        let polling = false;
+
+        async function postAction(url) {
+            const response = await fetch(url, {
+                method: "POST"
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || data.ok === false) {
+                throw new Error(
+                    data.message || "Yêu cầu không thành công."
+                );
+            }
+
+            return data;
+        }
+
+        async function startCamera() {
+            try {
+                const data = await postAction("/start");
+
+                document.getElementById("message").textContent =
+                    data.message;
+
+                // Yêu cầu trình duyệt tải lại luồng preview.
+                const camera = document.getElementById("camera");
+                camera.src = "/video_feed?t=" + Date.now();
+            } catch (error) {
+                showError(error);
+            }
+        }
+
+        async function stopCamera() {
+            try {
+                const data = await postAction("/stop");
+
+                document.getElementById("message").textContent =
+                    data.message;
+            } catch (error) {
+                showError(error);
+            }
+        }
+
+        async function startCount() {
+            try {
+                const data = await postAction("/start_count");
+
+                document.getElementById("message").textContent =
+                    data.message;
+
+                document.getElementById("resultImage").hidden = true;
+                document.getElementById("resultPlaceholder").hidden = false;
+            } catch (error) {
+                showError(error);
+            }
+        }
+
+        async function saveImage() {
+            try {
+                const data = await postAction("/save");
+
+                document.getElementById("message").textContent =
+                    data.message + ": " + data.filename;
+            } catch (error) {
+                showError(error);
+            }
+        }
+
+        function showError(error) {
+            document.getElementById("message").textContent =
+                "Lỗi: " + error.message;
+        }
+
+        async function updateCounts() {
+            if (polling) return;
+            polling = true;
+
+            try {
+                const response = await fetch("/counts", {
+                    cache: "no-store"
+                });
+
+                if (!response.ok) {
+                    throw new Error("Không lấy được trạng thái.");
+                }
+
+                const data = await response.json();
+
+                document.getElementById("total").textContent =
+                    data.total;
+
+                document.getElementById("cameraStatus").textContent =
+                    "Camera: " + data.camera_status;
+
+                let sessionText = data.session_message;
+
+                if (
+                    data.session_state === "countdown" &&
+                    data.countdown_remaining > 0
+                ) {
+                    sessionText +=
+                        " — Còn " + data.countdown_remaining + " giây";
+                }
+
+                document.getElementById("sessionStatus").textContent =
+                    "Phiên đếm: " + sessionText;
+
+                document.getElementById("startCountBtn").disabled =
+                    !data.camera_ready ||
+                    ["countdown", "sampling", "processing"].includes(
+                        data.session_state
+                    );
+
+                renderCounts(data.counts);
+
+                if (data.result_filename) {
+                    const image = document.getElementById("resultImage");
+                    const placeholder =
+                        document.getElementById("resultPlaceholder");
+
+                    const expectedUrl =
+                        "/latest_result?filename=" +
+                        encodeURIComponent(data.result_filename);
+
+                    // Chỉ tải lại ảnh khi filename đổi.
+                    if (image.dataset.filename !== data.result_filename) {
+                        image.src = expectedUrl;
+                        image.dataset.filename = data.result_filename;
+                    }
+
+                    image.hidden = false;
+                    placeholder.hidden = true;
+                }
+            } catch (error) {
+                document.getElementById("cameraStatus").textContent =
+                    "Không kết nối được máy chủ Flask.";
+            } finally {
+                polling = false;
+            }
+        }
+
+        function renderCounts(counts) {
+            const container = document.getElementById("counts");
+            container.replaceChildren();
+
+            const entries = Object.entries(counts || {});
+
+            if (entries.length === 0) {
+                const message = document.createElement("p");
+                message.textContent = "Chưa phát hiện linh kiện.";
+                container.appendChild(message);
+                return;
+            }
+
+            for (const [name, quantity] of entries) {
+                const row = document.createElement("div");
+                row.className = "item";
+
+                const label = document.createElement("span");
+                label.textContent = name;
+
+                const value = document.createElement("span");
+                value.className = "number";
+                value.textContent = quantity;
+
+                row.append(label, value);
+                container.appendChild(row);
+            }
+        }
+
+        setInterval(updateCounts, 300);
+        updateCounts();
+    </script>
+</body>
+</html>
