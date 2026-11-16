@@ -64,3 +64,13 @@ state.vscdb.backup
 # OS
 .DS_Store
 Thumbs.db
+#json
+*.json
+
+# pictures
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp

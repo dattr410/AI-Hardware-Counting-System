@@ -1,401 +1,520 @@
-
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hệ thống đếm bu lông và ốc vít</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Đếm linh kiện – Nut · Screw · Washer</title>
+<style>
+:root {
+  --bg: #f3f5f8; --card: #ffffff; --line: #e3e8ee; --text: #14202b; --muted: #66747f;
+  --accent: #1457c8; --accent-dark: #0f46a3; --danger: #c0362c;
+  --ok-bg: #e3f1e7; --ok: #0b6b3a;
+  --warn-bg: #f8ece2; --warn: #9a3f00; --warn-line: #f0d5bd;
+  --nut: #14b8c8; --screw: #3b82f6; --washer: #8b98a5;
+  --radius: 16px;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+}
+.wrap { max-width: 1360px; margin: 0 auto; padding: 18px 20px 32px; }
 
-    <style>
-        * {
-            box-sizing: border-box;
-        }
+/* ---------- header ---------- */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+  width: 40px; height: 40px; border-radius: 12px; background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-weight: 700; letter-spacing: .5px;
+}
+.brand h1 { margin: 0; font-size: 18px; }
+.brand p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.top-right { display: flex; align-items: center; gap: 10px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+  background: #eef1f5; color: var(--muted); font-size: 13px; font-weight: 600;
+}
+.pill .dot { width: 9px; height: 9px; border-radius: 50%; background: #aab4be; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.ok .dot { background: #1fa45a; }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.warn .dot { background: #e07a1f; animation: blink 1s infinite; }
+.pill.bad { background: #fbe5e3; color: var(--danger); }
+.pill.bad .dot { background: var(--danger); }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; background: #fff; }
 
-        body {
-            margin: 0;
-            padding: 24px;
-            font-family: Arial, sans-serif;
-            background: #f3f5f8;
-            color: #202938;
-        }
+/* ---------- layout ---------- */
+.grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(330px, 1fr); gap: 18px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: 0 1px 2px rgba(20, 32, 43, .04); }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.card h2 { margin: 0; font-size: 16px; }
+.card h3 { margin: 18px 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+.hint { font-size: 12.5px; color: var(--muted); }
 
-        h1 {
-            margin-top: 0;
-        }
+/* ---------- video ---------- */
+.video { position: relative; aspect-ratio: 16 / 9; background: #0e141a; border-radius: 12px; overflow: hidden; }
+.video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.video-empty {
+  position: absolute; inset: 0; display: grid; place-content: center; text-align: center;
+  color: #9fb0bf; font-size: 15px; gap: 4px;
+}
+.video-empty small { color: #6f8191; }
+.vbadge {
+  position: absolute; left: 12px; bottom: 12px; background: rgba(0, 0, 0, .62); color: #fff;
+  padding: 6px 12px; border-radius: 999px; font-size: 13px; display: flex; align-items: center; gap: 8px;
+}
+.spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: spin .8s linear infinite; }
 
-        .layout {
-            display: grid;
-            grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
-            gap: 20px;
-        }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+.controls .spacer { flex: 1; }
+.btn {
+  border: 1px solid var(--line); background: #fff; color: var(--text); padding: 10px 16px; border-radius: 10px;
+  font: inherit; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s;
+}
+.btn:hover:not(:disabled) { background: #f4f7fa; border-color: #cfd8e1; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; padding: 12px 26px; font-size: 16px; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
 
-        .panel {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px #0000000d;
-            min-width: 0;
-        }
+/* ---------- stepper ---------- */
+.state { font-size: 12.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: #eef1f5; color: var(--muted); }
+.state.running { background: #e6efff; color: var(--accent); }
+.state.done { background: var(--ok-bg); color: var(--ok); }
+.state.error { background: #fbe5e3; color: var(--danger); }
+.steps { display: flex; gap: 6px; list-style: none; margin: 4px 0 0; padding: 0; counter-reset: s; }
+.steps li { flex: 1; position: relative; text-align: center; font-size: 12px; color: var(--muted); padding-top: 32px; }
+.steps li::before {
+  counter-increment: s; content: counter(s); position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 24px; height: 24px; border-radius: 50%; background: #e9edf1; color: var(--muted);
+  display: grid; place-items: center; font-weight: 700; font-size: 12px; z-index: 1;
+}
+.steps li::after { content: ""; position: absolute; top: 11px; left: calc(50% + 16px); right: calc(-50% + 16px); height: 2px; background: #e9edf1; }
+.steps li:last-child::after { display: none; }
+.steps li.done::before { background: #1fa45a; color: #fff; content: "✓"; }
+.steps li.done::after { background: #1fa45a; }
+.steps li.active { color: var(--accent); font-weight: 700; }
+.steps li.active::before { background: var(--accent); color: #fff; animation: pulse 1.2s infinite; }
+.msg { margin: 14px 0 0; font-size: 13.5px; color: var(--muted); }
 
-        .video {
-            display: block;
-            width: 100%;
-            min-height: 220px;
-            background: #151a22;
-            border-radius: 8px;
-            object-fit: contain;
-        }
+/* ---------- result card ---------- */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.tile { border-radius: 14px; padding: 16px 16px 14px; }
+.tile.ok { background: var(--ok-bg); }
+.tile.warn { background: var(--warn-bg); }
+.tile .num { font-size: 30px; font-weight: 700; line-height: 1.1; }
+.tile.ok .num { color: var(--ok); }
+.tile.warn .num { color: var(--warn); }
+.tile .t-title { margin-top: 10px; font-weight: 700; }
+.tile .t-sub { font-size: 12.5px; color: var(--muted); }
+.total { display: flex; align-items: baseline; justify-content: space-between; border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+.total span { font-weight: 700; }
+.total b { font-size: 24px; }
+.note { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); }
+.note.alert { color: var(--warn); }
 
-        .buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 16px;
-        }
+.classes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.classes li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+.classes .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.dot.nut { background: var(--nut); } .dot.screw { background: var(--screw); } .dot.washer { background: var(--washer); }
+.c-name { flex: 1; min-width: 0; }
+.c-name b { display: block; line-height: 1.2; }
+.c-name small { color: var(--muted); font-size: 12px; }
+.c-num { text-align: right; }
+.c-num b { font-size: 20px; line-height: 1.1; display: block; }
+.c-num small { font-size: 11.5px; color: var(--warn); font-weight: 600; }
 
-        button {
-            padding: 11px 16px;
-            border: 0;
-            border-radius: 7px;
-            cursor: pointer;
-            font-weight: bold;
-        }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn); border-radius: 10px; padding: 6px 10px; font-size: 13px; font-weight: 600; }
+.chip small { font-weight: 500; color: #a8662f; margin-left: 6px; }
+.empty { font-size: 13px; color: var(--muted); }
 
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
+details.review { margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+details.review summary { cursor: pointer; font-weight: 600; }
+details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 
-        .start {
-            background: #16794b;
-            color: white;
-        }
+/* ---------- result image ---------- */
+.tabs { display: inline-flex; background: #eef1f5; border-radius: 10px; padding: 3px; }
+.tab { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.tab.active { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.shot { position: relative; aspect-ratio: 16 / 9; background: #f0f3f6; border-radius: 12px; overflow: hidden; display: grid; place-items: center; }
+.shot a { display: block; width: 100%; height: 100%; }
+.shot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.shot .empty { position: absolute; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+.legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 2px solid; }
+.sw.ok { border-color: #1fd15f; } .sw.warn { border-color: #ff8c00; }
+.row-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.row-actions .hint { flex: 1; }
 
-        .stop {
-            background: #c63b3b;
-            color: white;
-        }
+/* ---------- toast ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0;
+  background: #14202b; color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 14px;
+  transition: opacity .2s, transform .2s; pointer-events: none; z-index: 20; max-width: 90vw;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.bad { background: var(--danger); }
 
-        .count {
-            background: #235bc5;
-            color: white;
-        }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes blink { 50% { opacity: .35; } }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(20, 87, 200, .35); } 50% { box-shadow: 0 0 0 6px rgba(20, 87, 200, 0); } }
 
-        .save {
-            background: #475569;
-            color: white;
-        }
-
-        .total {
-            font-size: 38px;
-            font-weight: bold;
-            margin: 8px 0 20px;
-        }
-
-        .item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            padding: 13px 0;
-            border-bottom: 1px solid #e5e7eb;
-        }
-
-        .number {
-            font-weight: bold;
-            font-size: 20px;
-        }
-
-        .status {
-            margin-top: 12px;
-            padding: 10px 12px;
-            background: #f1f5f9;
-            border-radius: 7px;
-            overflow-wrap: anywhere;
-        }
-
-        .result-section {
-            margin-top: 24px;
-        }
-
-        .result-image {
-            display: block;
-            width: 100%;
-            border-radius: 8px;
-            background: #151a22;
-        }
-
-        .hint {
-            color: #64748b;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        @media (max-width: 760px) {
-            .layout {
-                grid-template-columns: 1fr;
-            }
-
-            body {
-                padding: 12px;
-            }
-        }
-    </style>
+@media (max-width: 1000px) {
+  .grid { grid-template-columns: 1fr; }
+  .top { flex-direction: column; align-items: flex-start; }
+}
+</style>
 </head>
-
 <body>
-    <h1>Hệ thống nhận diện và đếm linh kiện</h1>
-    <p>Camera USB · YOLO · Flask</p>
+<div class="wrap">
 
-    <div class="layout">
-        <section class="panel">
-            <h2>Camera trực tiếp</h2>
+  <header class="top">
+    <div class="brand">
+      <div class="logo">CV</div>
+      <div>
+        <h1>Hệ thống đếm linh kiện</h1>
+        <p>YOLO · Hikvision RTSP · Nut / Screw / Washer</p>
+      </div>
+    </div>
+    <div class="top-right">
+      <span class="pill" id="camPill"><i class="dot"></i><span id="camText">Đã dừng</span></span>
+      <span class="tag" id="profileTag">profile: –</span>
+    </div>
+  </header>
 
-            <img
-                class="video"
-                id="camera"
-                src="/video_feed"
-                alt="Hình ảnh camera trực tiếp"
-            >
+  <div class="grid">
 
-            <div class="buttons">
-                <button class="start" id="startCameraBtn"
-                        onclick="startCamera()">
-                    Bật camera
-                </button>
+    <!-- ========== CỘT TRÁI ========== -->
+    <div class="col">
+      <section class="card">
+        <div class="card-head">
+          <h2>Camera trực tiếp</h2>
+          <span class="hint">Khung xanh lá = vùng YOLO xử lý</span>
+        </div>
+        <div class="video">
+          <img id="video" alt="Camera trực tiếp" hidden>
+          <div class="video-empty" id="videoEmpty">
+            <div>Camera đang tắt</div>
+            <small>Nhấn “Bật camera” để bắt đầu</small>
+          </div>
+          <div class="vbadge" id="vbadge" hidden><i class="spinner"></i><span id="vbadgeText"></span></div>
+        </div>
+        <div class="controls">
+          <button class="btn" id="btnStart">Bật camera</button>
+          <button class="btn" id="btnStop">Tắt camera</button>
+          <button class="btn" id="btnSave">Lưu ảnh hiện tại</button>
+          <span class="spacer"></span>
+          <button class="btn primary" id="btnCount">Bắt đầu đếm</button>
+        </div>
+      </section>
 
-                <button class="count" id="startCountBtn"
-                        onclick="startCount()" disabled>
-                    Bắt đầu đếm
-                </button>
-
-                <button class="stop" onclick="stopCamera()">
-                    Dừng camera
-                </button>
-
-                <button class="save" onclick="saveImage()">
-                    Lưu ảnh hiện tại
-                </button>
-            </div>
-
-            <p class="status" id="cameraStatus">
-                Camera: Đã dừng
-            </p>
-
-            <p class="status" id="sessionStatus">
-                Phiên đếm: Sẵn sàng
-            </p>
-
-            <p id="message" aria-live="polite"></p>
-
-            <div class="result-section">
-                <h3>Ảnh kết quả phiên đếm gần nhất</h3>
-
-                <img
-                    id="resultImage"
-                    class="result-image"
-                    alt="Ảnh kết quả nhận diện"
-                    hidden
-                >
-
-                <p id="resultPlaceholder" class="hint">
-                    Ảnh có bounding box sẽ xuất hiện sau khi hoàn tất đếm.
-                </p>
-            </div>
-        </section>
-
-        <section class="panel">
-            <h2>Kết quả đếm</h2>
-
-            <p>Tổng số linh kiện</p>
-            <div class="total" id="total">0</div>
-
-            <div id="counts">
-                <p>Chưa có kết quả nhận diện.</p>
-            </div>
-
-            <p class="hint">
-                Kết quả được tính riêng cho từng phiên đếm.
-                Các frame của cùng một phiên được đối chiếu để
-                hạn chế đếm trùng.
-            </p>
-        </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>Ảnh phiên đếm gần nhất</h2>
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-view="result" role="tab">Kết quả</button>
+            <button class="tab" data-view="raw" role="tab">Ảnh gốc</button>
+          </div>
+        </div>
+        <div class="shot">
+          <a id="shotLink" target="_blank" rel="noopener" hidden><img id="shotImg" alt="Ảnh phiên đếm"></a>
+          <div class="empty" id="shotEmpty">Chưa có ảnh kết quả</div>
+        </div>
+        <div class="legend">
+          <span><i class="sw ok"></i>Đã xác nhận</span>
+          <span><i class="sw warn"></i>Chờ xác minh (nhãn ?1, ?2…)</span>
+          <span>Nhấn vào ảnh để mở cỡ lớn</span>
+        </div>
+        <div class="row-actions">
+          <span class="hint" id="reviewNote">Lưu cặp ảnh gốc + ảnh kết quả để gán nhãn và train thêm.</span>
+          <button class="btn" id="btnReview">Lưu vào review</button>
+        </div>
+      </section>
     </div>
 
-    <script>
-        let polling = false;
+    <!-- ========== CỘT PHẢI ========== -->
+    <div class="col">
+      <section class="card">
+        <div class="card-head">
+          <h2>Phiên đếm</h2>
+          <span class="state" id="stateBadge">Sẵn sàng</span>
+        </div>
+        <ol class="steps" id="steps">
+          <li data-s="countdown">Đếm ngược</li>
+          <li data-s="sampling">Lấy 5 frame</li>
+          <li data-s="processing">Nhận diện</li>
+          <li data-s="done">Hoàn tất</li>
+        </ol>
+        <p class="msg" id="msg" aria-live="polite">Sẵn sàng đếm</p>
+      </section>
 
-        async function postAction(url) {
-            const response = await fetch(url, {
-                method: "POST"
-            });
+      <section class="card">
+        <h2>Kết quả nhận diện</h2>
+        <div class="tiles">
+          <div class="tile ok">
+            <div class="num" id="nConfirmed">–</div>
+            <div class="t-title">Đã xác nhận</div>
+            <div class="t-sub">Đủ điều kiện tự động</div>
+          </div>
+          <div class="tile warn">
+            <div class="num" id="nPending">–</div>
+            <div class="t-title">Chờ xác minh</div>
+            <div class="t-sub">Confidence thấp</div>
+          </div>
+        </div>
+        <div class="total"><span>Tổng phát hiện</span><b id="nTotal">–</b></div>
+        <p class="note" id="totalNote">Chưa có kết quả. Nhấn “Bắt đầu đếm”.</p>
 
-            const data = await response.json();
+        <h3>Theo loại</h3>
+        <ul class="classes">
+          <li><i class="dot nut"></i><div class="c-name"><b>Nut</b><small>Đai ốc</small></div>
+              <div class="c-num"><b id="cn_nut">–</b><small id="cp_nut"></small></div></li>
+          <li><i class="dot screw"></i><div class="c-name"><b>Screw</b><small>Ốc vít</small></div>
+              <div class="c-num"><b id="cn_screw">–</b><small id="cp_screw"></small></div></li>
+          <li><i class="dot washer"></i><div class="c-name"><b>Washer</b><small>Long đền</small></div>
+              <div class="c-num"><b id="cn_washer">–</b><small id="cp_washer"></small></div></li>
+        </ul>
 
-            if (!response.ok || data.ok === false) {
-                throw new Error(
-                    data.message || "Yêu cầu không thành công."
-                );
-            }
+        <h3>Vật chờ xác minh</h3>
+        <div class="chips" id="pendingList"><span class="empty">Chưa có kết quả</span></div>
 
-            return data;
-        }
+        <details class="review" id="reviewBox" hidden>
+          <summary id="reviewSummary"></summary>
+          <ul id="reasonList"></ul>
+        </details>
+      </section>
+    </div>
 
-        async function startCamera() {
-            try {
-                const data = await postAction("/start");
+  </div>
+</div>
 
-                document.getElementById("message").textContent =
-                    data.message;
+<div class="toast" id="toast" role="status"></div>
 
-                // Yêu cầu trình duyệt tải lại luồng preview.
-                const camera = document.getElementById("camera");
-                camera.src = "/video_feed?t=" + Date.now();
-            } catch (error) {
-                showError(error);
-            }
-        }
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var CLASSES = ["nut", "screw", "washer"];
+  var CLASS_VI = { nut: "Nut", screw: "Screw", washer: "Washer" };
+  var STEP_ORDER = ["countdown", "sampling", "processing", "done"];
+  var STATE_TEXT = { idle: "Sẵn sàng", countdown: "Đếm ngược", sampling: "Lấy frame",
+                     processing: "Nhận diện", done: "Hoàn tất", error: "Lỗi" };
+  var REASON_TEXT = {
+    recovered_low_conf: "Có vật confidence thấp (chờ xác minh)",
+    low_confidence: "Nut/Washer có confidence dưới 0.70",
+    few_observations: "Có vật chỉ xuất hiện ở ít frame",
+    class_unstable: "Loại vật thay đổi giữa các frame",
+    shape_disagreement: "Hình dạng OpenCV khác kết quả YOLO",
+    nut_washer_vote_conflict: "Nut/Washer bị nhầm giữa các frame",
+    frame_count_variation: "Số vật thay đổi giữa các frame",
+    manual_review: "Lưu review thủ công"
+  };
 
-        async function stopCamera() {
-            try {
-                const data = await postAction("/stop");
+  var view = "result";
+  var lastFile = null;       // result_filename đang hiển thị
+  var shownKey = "";         // filename + view đã nạp vào <img>
+  var toastTimer = null;
+  var last = {};             // dữ liệu /counts gần nhất
 
-                document.getElementById("message").textContent =
-                    data.message;
-            } catch (error) {
-                showError(error);
-            }
-        }
+  /* ---------- tiện ích ---------- */
+  function toast(msg, bad) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.className = "toast show" + (bad ? " bad" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = "toast"; }, 2800);
+  }
 
-        async function startCount() {
-            try {
-                const data = await postAction("/start_count");
+  function post(url) {
+    return fetch(url, { method: "POST" })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok && j.ok !== false, j: j }; }); })
+      .catch(function () { return { ok: false, j: { message: "Không kết nối được máy chủ" } }; });
+  }
 
-                document.getElementById("message").textContent =
-                    data.message;
+  function setVideoSrc() { $("video").src = "/video_feed?t=" + Date.now(); }
 
-                document.getElementById("resultImage").hidden = true;
-                document.getElementById("resultPlaceholder").hidden = false;
-            } catch (error) {
-                showError(error);
-            }
-        }
+  /* ---------- nút điều khiển ---------- */
+  $("btnStart").onclick = function () {
+    post("/start").then(function (r) {
+      toast(r.j.message || (r.ok ? "Đang khởi động camera..." : "Không bật được camera"), !r.ok);
+      if (r.ok) setVideoSrc();
+    });
+  };
+  $("btnStop").onclick = function () {
+    post("/stop").then(function (r) {
+      toast(r.j.message || "Đã yêu cầu dừng camera", !r.ok);
+      $("video").removeAttribute("src");
+    });
+  };
+  $("btnCount").onclick = function () {
+    post("/start_count").then(function (r) { toast(r.j.message || "Bắt đầu đếm", !r.ok); });
+  };
+  $("btnSave").onclick = function () {
+    post("/save").then(function (r) { toast(r.j.message || "Đã lưu", !r.ok); });
+  };
+  $("btnReview").onclick = function () {
+    post("/save_review").then(function (r) { toast(r.j.message || (r.ok ? "Đã lưu review" : "Chưa có phiên để review"), !r.ok); });
+  };
 
-        async function saveImage() {
-            try {
-                const data = await postAction("/save");
+  /* ---------- tab ảnh ---------- */
+  var tabs = document.querySelectorAll(".tab");
+  Array.prototype.forEach.call(tabs, function (tab) {
+    tab.onclick = function () {
+      view = tab.getAttribute("data-view");
+      Array.prototype.forEach.call(tabs, function (x) { x.classList.toggle("active", x === tab); });
+      shownKey = "";
+      refreshShot();
+    };
+  });
 
-                document.getElementById("message").textContent =
-                    data.message + ": " + data.filename;
-            } catch (error) {
-                showError(error);
-            }
-        }
+  function refreshShot() {
+    var key = (last.result_filename || "") + "|" + view;
+    if (!last.result_filename) {
+      $("shotLink").hidden = true;
+      $("shotEmpty").hidden = false;
+      shownKey = "";
+      return;
+    }
+    if (key === shownKey) return;
+    shownKey = key;
+    var url = (view === "raw" ? "/latest_raw" : "/latest_result") + "?t=" + Date.now();
+    $("shotImg").src = url;
+    $("shotLink").href = url;
+    $("shotLink").hidden = false;
+    $("shotEmpty").hidden = true;
+  }
+  $("shotImg").onerror = function () {
+    $("shotLink").hidden = true;
+    $("shotEmpty").hidden = false;
+    $("shotEmpty").textContent = "Không tải được ảnh";
+  };
+  $("shotImg").onload = function () { $("shotEmpty").textContent = "Chưa có ảnh kết quả"; };
 
-        function showError(error) {
-            document.getElementById("message").textContent =
-                "Lỗi: " + error.message;
-        }
+  /* ---------- vẽ giao diện từ /counts ---------- */
+  function num(v) { return (typeof v === "number") ? String(v) : "–"; }
 
-        async function updateCounts() {
-            if (polling) return;
-            polling = true;
+  function render(d) {
+    last = d;
+    var state = d.session_state || "idle";
+    var busy = state === "countdown" || state === "sampling" || state === "processing";
+    var stopped = (d.camera_status === "Đã dừng");
+    var hasResult = !!d.result_filename;
 
-            try {
-                const response = await fetch("/counts", {
-                    cache: "no-store"
-                });
+    $("profileTag").textContent = "profile: " + (d.profile || "–");
 
-                if (!response.ok) {
-                    throw new Error("Không lấy được trạng thái.");
-                }
+    /* camera */
+    var pill = $("camPill");
+    pill.className = "pill " + (d.camera_ready ? "ok" : (stopped ? "" : "warn"));
+    $("camText").textContent = d.camera_status || "–";
+    $("video").hidden = stopped;
+    $("videoEmpty").hidden = !stopped;
+    if (!stopped && !$("video").getAttribute("src")) setVideoSrc();   // tải lại trang khi camera đang chạy
 
-                const data = await response.json();
+    $("btnStart").disabled = !stopped;
+    $("btnStop").disabled = stopped;
+    $("btnCount").disabled = !d.camera_ready || busy;
+    $("btnSave").disabled = stopped;
+    $("btnReview").disabled = !hasResult;
 
-                document.getElementById("total").textContent =
-                    data.total;
+    /* lớp phủ trên video */
+    var vb = $("vbadge");
+    vb.hidden = !(state === "sampling" || state === "processing");
+    $("vbadgeText").textContent = state === "sampling" ? "Giữ yên — đang lấy frame…" : "Đang nhận diện…";
 
-                document.getElementById("cameraStatus").textContent =
-                    "Camera: " + data.camera_status;
+    /* trạng thái phiên + stepper */
+    var badge = $("stateBadge");
+    badge.textContent = STATE_TEXT[state] || state;
+    badge.className = "state" + (busy ? " running" : (state === "done" ? " done" : (state === "error" ? " error" : "")));
+    var idx = STEP_ORDER.indexOf(state);
+    Array.prototype.forEach.call($("steps").children, function (li, i) {
+      li.className = (state === "done" || i < idx) ? "done" : (i === idx ? "active" : "");
+    });
+    $("msg").textContent = d.session_message || "";
 
-                let sessionText = data.session_message;
+    /* kết quả */
+    var pending = d.pending || 0;
+    $("nConfirmed").textContent = hasResult ? num(d.confirmed) : "–";
+    $("nPending").textContent = hasResult ? num(d.pending) : "–";
+    $("nTotal").textContent = hasResult ? num(d.total) : "–";
 
-                if (
-                    data.session_state === "countdown" &&
-                    data.countdown_remaining > 0
-                ) {
-                    sessionText +=
-                        " — Còn " + data.countdown_remaining + " giây";
-                }
+    var note = $("totalNote");
+    if (!hasResult) {
+      note.className = "note";
+      note.textContent = busy ? "Đang xử lý phiên đếm…" : "Chưa có kết quả. Nhấn “Bắt đầu đếm”.";
+    } else if (pending > 0) {
+      note.className = "note alert";
+      note.textContent = "Tổng đã gồm " + pending + " vật chờ xác minh. Kiểm tra các khung cam (?1, ?2…) trên ảnh: " +
+                         "đúng là vật thật thì giữ nguyên, là nhiễu thì trừ đi.";
+    } else {
+      note.className = "note";
+      note.textContent = "Tất cả vật đều đã được xác nhận tự động.";
+    }
 
-                document.getElementById("sessionStatus").textContent =
-                    "Phiên đếm: " + sessionText;
+    var cp = d.counts_pending || {};
+    CLASSES.forEach(function (c) {
+      $("cn_" + c).textContent = hasResult ? num((d.counts || {})[c] || 0) : "–";
+      $("cp_" + c).textContent = (hasResult && cp[c]) ? ("trong đó " + cp[c] + " chờ xác minh") : "";
+    });
 
-                document.getElementById("startCountBtn").disabled =
-                    !data.camera_ready ||
-                    ["countdown", "sampling", "processing"].includes(
-                        data.session_state
-                    );
+    /* danh sách chờ xác minh */
+    var list = $("pendingList");
+    list.innerHTML = "";
+    var items = d.pending_items || [];
+    if (!hasResult) {
+      list.innerHTML = '<span class="empty">Chưa có kết quả</span>';
+    } else if (!items.length) {
+      list.innerHTML = '<span class="empty">Không có vật nào chờ xác minh</span>';
+    } else {
+      items.forEach(function (it) {
+        var s = document.createElement("span");
+        s.className = "chip";
+        s.textContent = "?" + it.index + " " + (CLASS_VI[it.class] || it.class) + " · " + Math.round(it.conf * 100) + "%";
+        var sm = document.createElement("small");
+        sm.textContent = it.obs + " frame";
+        s.appendChild(sm);
+        list.appendChild(s);
+      });
+    }
 
-                renderCounts(data.counts);
+    /* cảnh báo review */
+    var reasons = d.review_reasons || [];
+    var box = $("reviewBox");
+    box.hidden = !(hasResult && reasons.length);
+    if (!box.hidden) {
+      $("reviewSummary").textContent = "Phiên có " + reasons.length + " cảnh báo" +
+        (d.raw_filename ? " — đã lưu review (" + d.raw_filename + ")" : "");
+      var ul = $("reasonList");
+      ul.innerHTML = "";
+      reasons.forEach(function (r) {
+        var key = String(r).split(":")[0];
+        var li = document.createElement("li");
+        li.textContent = REASON_TEXT[key] || key;
+        li.title = r;
+        ul.appendChild(li);
+      });
+    }
+    $("reviewNote").textContent = d.raw_filename
+      ? "Đã lưu: " + d.raw_filename
+      : "Lưu cặp ảnh gốc + ảnh kết quả để gán nhãn và train thêm.";
 
-                if (data.result_filename) {
-                    const image = document.getElementById("resultImage");
-                    const placeholder =
-                        document.getElementById("resultPlaceholder");
+    refreshShot();
+  }
 
-                    const expectedUrl =
-                        "/latest_result?filename=" +
-                        encodeURIComponent(data.result_filename);
-
-                    // Chỉ tải lại ảnh khi filename đổi.
-                    if (image.dataset.filename !== data.result_filename) {
-                        image.src = expectedUrl;
-                        image.dataset.filename = data.result_filename;
-                    }
-
-                    image.hidden = false;
-                    placeholder.hidden = true;
-                }
-            } catch (error) {
-                document.getElementById("cameraStatus").textContent =
-                    "Không kết nối được máy chủ Flask.";
-            } finally {
-                polling = false;
-            }
-        }
-
-        function renderCounts(counts) {
-            const container = document.getElementById("counts");
-            container.replaceChildren();
-
-            const entries = Object.entries(counts || {});
-
-            if (entries.length === 0) {
-                const message = document.createElement("p");
-                message.textContent = "Chưa phát hiện linh kiện.";
-                container.appendChild(message);
-                return;
-            }
-
-            for (const [name, quantity] of entries) {
-                const row = document.createElement("div");
-                row.className = "item";
-
-                const label = document.createElement("span");
-                label.textContent = name;
-
-                const value = document.createElement("span");
-                value.className = "number";
-                value.textContent = quantity;
-
-                row.append(label, value);
-                container.appendChild(row);
-            }
-        }
-
-        setInterval(updateCounts, 300);
-        updateCounts();
-    </script>
+  /* ---------- vòng lặp cập nhật ---------- */
+  var offline = false;
+  function poll() {
+    fetch("/counts", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { offline = false; render(d); })
+      .catch(function () {
+        if (!offline) { offline = true; $("camText").textContent = "Mất kết nối máy chủ"; $("camPill").className = "pill bad"; }
+      })
+      .then(function () { setTimeout(poll, 600); });
+  }
+  poll();
+})();
+</script>
 </body>
 </html>
