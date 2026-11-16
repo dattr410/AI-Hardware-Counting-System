@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Đếm linh kiện – Nut · Screw · Washer</title>
+<title>Hệ thống đếm linh kiện – Đai ốc · Ốc vít · Long đền</title>
 <style>
 :root {
   --bg: #f3f5f8; --card: #ffffff; --line: #e3e8ee; --text: #14202b; --muted: #66747f;
@@ -175,12 +175,12 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
       <div class="logo">CV</div>
       <div>
         <h1>Hệ thống đếm linh kiện</h1>
-        <p>YOLO · Hikvision RTSP · Nut / Screw / Washer</p>
+        <p>YOLO · Hikvision RTSP · Đai ốc / Ốc vít / Long đền</p>
       </div>
     </div>
     <div class="top-right">
       <span class="pill" id="camPill"><i class="dot"></i><span id="camText">Đã dừng</span></span>
-      <span class="tag" id="profileTag">profile: –</span>
+      <span class="tag" id="profileTag">Cấu hình: –</span>
     </div>
   </header>
 
@@ -191,7 +191,7 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
       <section class="card">
         <div class="card-head">
           <h2>Camera trực tiếp</h2>
-          <span class="hint">Khung xanh lá = vùng YOLO xử lý</span>
+          <span class="hint">Khung xanh lá = vùng AI xử lý</span>
         </div>
         <div class="video">
           <img id="video" alt="Camera trực tiếp" hidden>
@@ -224,12 +224,12 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
         </div>
         <div class="legend">
           <span><i class="sw ok"></i>Đã xác nhận</span>
-          <span><i class="sw warn"></i>Chờ xác minh (nhãn ?1, ?2…)</span>
-          <span>Nhấn vào ảnh để mở cỡ lớn</span>
+          <span><i class="sw warn"></i>Chờ xác minh (?1, ?2…)</span>
+          <span>Nhấn vào ảnh để xem kích thước lớn</span>
         </div>
         <div class="row-actions">
-          <span class="hint" id="reviewNote">Lưu cặp ảnh gốc + ảnh kết quả để gán nhãn và train thêm.</span>
-          <button class="btn" id="btnReview">Lưu vào review</button>
+          <span class="hint" id="reviewNote">Lưu cặp ảnh gốc + ảnh kết quả để gán nhãn và tối ưu mô hình.</span>
+          <button class="btn" id="btnReview">Lưu đánh giá</button>
         </div>
       </section>
     </div>
@@ -243,11 +243,11 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
         </div>
         <ol class="steps" id="steps">
           <li data-s="countdown">Đếm ngược</li>
-          <li data-s="sampling">Lấy 5 frame</li>
+          <li data-s="sampling">Lấy khung hình</li>
           <li data-s="processing">Nhận diện</li>
           <li data-s="done">Hoàn tất</li>
         </ol>
-        <p class="msg" id="msg" aria-live="polite">Sẵn sàng đếm</p>
+        <p class="msg" id="msg" aria-live="polite">Hệ thống sẵn sàng đếm</p>
       </section>
 
       <section class="card">
@@ -256,28 +256,28 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
           <div class="tile ok">
             <div class="num" id="nConfirmed">–</div>
             <div class="t-title">Đã xác nhận</div>
-            <div class="t-sub">Đủ điều kiện tự động</div>
+            <div class="t-sub">Độ tin cậy cao</div>
           </div>
           <div class="tile warn">
             <div class="num" id="nPending">–</div>
             <div class="t-title">Chờ xác minh</div>
-            <div class="t-sub">Confidence thấp</div>
+            <div class="t-sub">Cần xem xét lại</div>
           </div>
         </div>
         <div class="total"><span>Tổng phát hiện</span><b id="nTotal">–</b></div>
         <p class="note" id="totalNote">Chưa có kết quả. Nhấn “Bắt đầu đếm”.</p>
 
-        <h3>Theo loại</h3>
+        <h3>Phân loại chi tiết</h3>
         <ul class="classes">
-          <li><i class="dot nut"></i><div class="c-name"><b>Nut</b><small>Đai ốc</small></div>
+          <li><i class="dot nut"></i><div class="c-name"><b>Đai ốc</b><small>Nut</small></div>
               <div class="c-num"><b id="cn_nut">–</b><small id="cp_nut"></small></div></li>
-          <li><i class="dot screw"></i><div class="c-name"><b>Screw</b><small>Ốc vít</small></div>
+          <li><i class="dot screw"></i><div class="c-name"><b>Ốc vít</b><small>Screw</small></div>
               <div class="c-num"><b id="cn_screw">–</b><small id="cp_screw"></small></div></li>
-          <li><i class="dot washer"></i><div class="c-name"><b>Washer</b><small>Long đền</small></div>
+          <li><i class="dot washer"></i><div class="c-name"><b>Long đền</b><small>Washer</small></div>
               <div class="c-num"><b id="cn_washer">–</b><small id="cp_washer"></small></div></li>
         </ul>
 
-        <h3>Vật chờ xác minh</h3>
+        <h3>Linh kiện chờ xác minh</h3>
         <div class="chips" id="pendingList"><span class="empty">Chưa có kết quả</span></div>
 
         <details class="review" id="reviewBox" hidden>
@@ -297,28 +297,26 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var CLASSES = ["nut", "screw", "washer"];
-  var CLASS_VI = { nut: "Nut", screw: "Screw", washer: "Washer" };
+  var CLASS_VI = { nut: "Đai ốc", screw: "Ốc vít", washer: "Long đền" };
   var STEP_ORDER = ["countdown", "sampling", "processing", "done"];
-  var STATE_TEXT = { idle: "Sẵn sàng", countdown: "Đếm ngược", sampling: "Lấy frame",
+  var STATE_TEXT = { idle: "Sẵn sàng", countdown: "Đếm ngược", sampling: "Lấy khung hình",
                      processing: "Nhận diện", done: "Hoàn tất", error: "Lỗi" };
   var REASON_TEXT = {
-    recovered_low_conf: "Có vật confidence thấp (chờ xác minh)",
-    low_confidence: "Nut/Washer có confidence dưới 0.70",
-    few_observations: "Có vật chỉ xuất hiện ở ít frame",
-    class_unstable: "Loại vật thay đổi giữa các frame",
-    shape_disagreement: "Hình dạng OpenCV khác kết quả YOLO",
-    nut_washer_vote_conflict: "Nut/Washer bị nhầm giữa các frame",
-    frame_count_variation: "Số vật thay đổi giữa các frame",
-    manual_review: "Lưu review thủ công"
+    recovered_low_conf: "Có linh kiện độ tin cậy thấp (chờ xác minh)",
+    low_confidence: "Đai ốc/Long đền có độ tin cậy dưới 0.70",
+    few_observations: "Linh kiện chỉ xuất hiện ở ít khung hình",
+    class_unstable: "Loại linh kiện thay đổi giữa các khung hình",
+    shape_disagreement: "Hình dạng thực tế khác kết quả AI",
+    nut_washer_vote_conflict: "Đai ốc/Long đền bị nhầm lẫn giữa các khung",
+    frame_count_variation: "Số lượng linh kiện thay đổi giữa các khung",
+    manual_review: "Đã lưu đánh giá thủ công"
   };
 
   var view = "result";
-  var lastFile = null;       // result_filename đang hiển thị
-  var shownKey = "";         // filename + view đã nạp vào <img>
+  var shownKey = "";
   var toastTimer = null;
-  var last = {};             // dữ liệu /counts gần nhất
+  var last = {};
 
-  /* ---------- tiện ích ---------- */
   function toast(msg, bad) {
     var t = $("toast");
     t.textContent = msg;
@@ -335,7 +333,6 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 
   function setVideoSrc() { $("video").src = "/video_feed?t=" + Date.now(); }
 
-  /* ---------- nút điều khiển ---------- */
   $("btnStart").onclick = function () {
     post("/start").then(function (r) {
       toast(r.j.message || (r.ok ? "Đang khởi động camera..." : "Không bật được camera"), !r.ok);
@@ -352,13 +349,12 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
     post("/start_count").then(function (r) { toast(r.j.message || "Bắt đầu đếm", !r.ok); });
   };
   $("btnSave").onclick = function () {
-    post("/save").then(function (r) { toast(r.j.message || "Đã lưu", !r.ok); });
+    post("/save").then(function (r) { toast(r.j.message || "Đã lưu ảnh", !r.ok); });
   };
   $("btnReview").onclick = function () {
-    post("/save_review").then(function (r) { toast(r.j.message || (r.ok ? "Đã lưu review" : "Chưa có phiên để review"), !r.ok); });
+    post("/save_review").then(function (r) { toast(r.j.message || (r.ok ? "Đã lưu đánh giá" : "Chưa có phiên để đánh giá"), !r.ok); });
   };
 
-  /* ---------- tab ảnh ---------- */
   var tabs = document.querySelectorAll(".tab");
   Array.prototype.forEach.call(tabs, function (tab) {
     tab.onclick = function () {
@@ -392,7 +388,6 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
   };
   $("shotImg").onload = function () { $("shotEmpty").textContent = "Chưa có ảnh kết quả"; };
 
-  /* ---------- vẽ giao diện từ /counts ---------- */
   function num(v) { return (typeof v === "number") ? String(v) : "–"; }
 
   function render(d) {
@@ -402,15 +397,14 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
     var stopped = (d.camera_status === "Đã dừng");
     var hasResult = !!d.result_filename;
 
-    $("profileTag").textContent = "profile: " + (d.profile || "–");
+    $("profileTag").textContent = "Cấu hình: " + (d.profile || "–");
 
-    /* camera */
     var pill = $("camPill");
     pill.className = "pill " + (d.camera_ready ? "ok" : (stopped ? "" : "warn"));
     $("camText").textContent = d.camera_status || "–";
     $("video").hidden = stopped;
     $("videoEmpty").hidden = !stopped;
-    if (!stopped && !$("video").getAttribute("src")) setVideoSrc();   // tải lại trang khi camera đang chạy
+    if (!stopped && !$("video").getAttribute("src")) setVideoSrc();
 
     $("btnStart").disabled = !stopped;
     $("btnStop").disabled = stopped;
@@ -418,12 +412,10 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
     $("btnSave").disabled = stopped;
     $("btnReview").disabled = !hasResult;
 
-    /* lớp phủ trên video */
     var vb = $("vbadge");
     vb.hidden = !(state === "sampling" || state === "processing");
-    $("vbadgeText").textContent = state === "sampling" ? "Giữ yên — đang lấy frame…" : "Đang nhận diện…";
+    $("vbadgeText").textContent = state === "sampling" ? "Giữ yên — đang lấy khung hình…" : "Đang nhận diện…";
 
-    /* trạng thái phiên + stepper */
     var badge = $("stateBadge");
     badge.textContent = STATE_TEXT[state] || state;
     badge.className = "state" + (busy ? " running" : (state === "done" ? " done" : (state === "error" ? " error" : "")));
@@ -433,7 +425,6 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
     });
     $("msg").textContent = d.session_message || "";
 
-    /* kết quả */
     var pending = d.pending || 0;
     $("nConfirmed").textContent = hasResult ? num(d.confirmed) : "–";
     $("nPending").textContent = hasResult ? num(d.pending) : "–";
@@ -445,11 +436,10 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
       note.textContent = busy ? "Đang xử lý phiên đếm…" : "Chưa có kết quả. Nhấn “Bắt đầu đếm”.";
     } else if (pending > 0) {
       note.className = "note alert";
-      note.textContent = "Tổng đã gồm " + pending + " vật chờ xác minh. Kiểm tra các khung cam (?1, ?2…) trên ảnh: " +
-                         "đúng là vật thật thì giữ nguyên, là nhiễu thì trừ đi.";
+      note.textContent = "Tổng đã gồm " + pending + " linh kiện chờ xác minh. Kiểm tra các khung (?1, ?2…) trên ảnh: đúng là vật thật thì giữ nguyên, nhiễu thì trừ đi.";
     } else {
       note.className = "note";
-      note.textContent = "Tất cả vật đều đã được xác nhận tự động.";
+      note.textContent = "Tất cả linh kiện đã được xác nhận tự động.";
     }
 
     var cp = d.counts_pending || {};
@@ -458,51 +448,48 @@ details.review ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
       $("cp_" + c).textContent = (hasResult && cp[c]) ? ("trong đó " + cp[c] + " chờ xác minh") : "";
     });
 
-    /* danh sách chờ xác minh */
     var list = $("pendingList");
     list.innerHTML = "";
     var items = d.pending_items || [];
     if (!hasResult) {
       list.innerHTML = '<span class="empty">Chưa có kết quả</span>';
     } else if (!items.length) {
-      list.innerHTML = '<span class="empty">Không có vật nào chờ xác minh</span>';
+      list.innerHTML = '<span class="empty">Không có linh kiện nào chờ xác minh</span>';
     } else {
       items.forEach(function (it) {
         var s = document.createElement("span");
         s.className = "chip";
         s.textContent = "?" + it.index + " " + (CLASS_VI[it.class] || it.class) + " · " + Math.round(it.conf * 100) + "%";
         var sm = document.createElement("small");
-        sm.textContent = it.obs + " frame";
+        sm.textContent = it.obs + " khung";
         s.appendChild(sm);
         list.appendChild(s);
       });
     }
 
-    /* cảnh báo review */
     var reasons = d.review_reasons || [];
     var box = $("reviewBox");
     box.hidden = !(hasResult && reasons.length);
     if (!box.hidden) {
       $("reviewSummary").textContent = "Phiên có " + reasons.length + " cảnh báo" +
-        (d.raw_filename ? " — đã lưu review (" + d.raw_filename + ")" : "");
+        (d.raw_filename ? " — đã lưu đánh giá (" + d.raw_filename + ")" : "");
       var ul = $("reasonList");
       ul.innerHTML = "";
       reasons.forEach(function (r) {
         var key = String(r).split(":")[0];
         var li = document.createElement("li");
-        li.textContent = REASON_TEXT[key] || key;
+        li.textContent = REASON_TEXT[key] || r;
         li.title = r;
         ul.appendChild(li);
       });
     }
     $("reviewNote").textContent = d.raw_filename
       ? "Đã lưu: " + d.raw_filename
-      : "Lưu cặp ảnh gốc + ảnh kết quả để gán nhãn và train thêm.";
+      : "Lưu cặp ảnh gốc + ảnh kết quả để tối ưu mô hình.";
 
     refreshShot();
   }
 
-  /* ---------- vòng lặp cập nhật ---------- */
   var offline = false;
   function poll() {
     fetch("/counts", { cache: "no-store" })

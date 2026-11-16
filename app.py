@@ -22,6 +22,7 @@ import json
 import math
 import shutil
 import time
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,11 @@ from threading import Lock, Thread
 from urllib.parse import quote
 
 from flask import Flask, Response, jsonify, redirect, render_template, send_file
+try:
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont   # ve chu tieng Viet co dau (cv2.putText khong ho tro)
+except ImportError:                               # thieu Pillow -> tu dong dung chu khong dau
+    np = Image = ImageDraw = ImageFont = None
 from ultralytics import YOLO
 
 app = Flask(__name__)
@@ -40,7 +46,10 @@ def _env_bool(name, default):
 
 
 def log(msg):
-    print(msg, flush=True)
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:   # console Windows cu khong in duoc tieng Viet co dau
+        print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 # ==================================================
@@ -51,7 +60,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "best3.pt"
 CAMERA_IP = os.getenv("CAMERA_IP", "192.168.1.233")
 CAMERA_USERNAME = os.getenv("CAMERA_USERNAME", "admin")
 # KHONG hard-code mat khau trong source. Dat bang: setx CAMERA_PASSWORD "..."
-CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "")
+CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "Ngan@nhphat2026")
 RTSP_PORT = int(os.getenv("RTSP_PORT", "554"))
 RTSP_URL = (
     f"rtsp://{quote(CAMERA_USERNAME, safe='')}:{quote(CAMERA_PASSWORD, safe='')}"
@@ -496,6 +505,65 @@ def run_counting_pipeline(frames, cfg=None):
             "t_infer": t_infer, "t_total": time.perf_counter() - t0}
 
 
+# ---------- chu tieng Viet tren anh ket qua ----------
+_BOLD_FONTS = [
+    r"C:\Windows\Fonts\segoeuib.ttf", r"C:\Windows\Fonts\arialbd.ttf", r"C:\Windows\Fonts\tahomabd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+]
+_font_cache = {}
+
+
+def _load_font(px):
+    """Tim font dam ho tro tieng Viet. Co the chi dinh bang bien moi truong OVERLAY_FONT."""
+    if px in _font_cache or ImageFont is None:
+        return _font_cache.get(px)
+    font = None
+    env = os.getenv("OVERLAY_FONT")
+    for path in ([env] if env else []) + _BOLD_FONTS:
+        try:
+            font = ImageFont.truetype(path, px)
+            break
+        except Exception:
+            continue
+    _font_cache[px] = font
+    return font
+
+
+def strip_accents(text):
+    text = text.replace("đ", "d").replace("Đ", "D")
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+
+
+def draw_summary_panel(img, lines, k):
+    """Ve bang tong ket goc tren-trai (nen den mo + chu mau). lines = [(text, bgr), ...].
+    Dung font TrueType nen hien thi duoc dau tieng Viet; neu khong tim thay font thi ve chu khong dau."""
+    h, w = img.shape[:2]
+    size, pad, step = int(round(28 * k)), int(round(14 * k)), int(round(40 * k))
+    x0, y0 = int(15 * k), int(10 * k)
+    font = _load_font(size)
+    if font is None:                                    # du phong: chu khong dau bang cv2
+        fb = cv2.FONT_HERSHEY_SIMPLEX
+        fs, th = 0.75 * k, max(2, int(round(2 * k)))
+        txt = [(strip_accents(t), c) for t, c in lines]
+        width = max(cv2.getTextSize(t, fb, fs, th)[0][0] for t, _ in txt) + 2 * pad
+        x1, y1 = min(w, x0 + width), min(h, y0 + step * len(txt) + pad)
+        img[y0:y1, x0:x1] = (img[y0:y1, x0:x1] * 0.35).astype(np.uint8) if np is not None else img[y0:y1, x0:x1]
+        for i, (t, c) in enumerate(txt):
+            cv2.putText(img, t, (x0 + pad, y0 + int(round(30 * k)) + i * step), fb, fs, c, th, cv2.LINE_AA)
+        return
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    width = int(max(probe.textlength(t, font=font) for t, _ in lines)) + 2 * pad
+    x1, y1 = min(w, x0 + width), min(h, y0 + step * len(lines) + pad)
+    roi = (img[y0:y1, x0:x1] * 0.35).astype(np.uint8)   # nen den, do dac 65%
+    pil = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil)
+    for i, (text, bgr) in enumerate(lines):
+        draw.text((pad, pad // 2 + i * step), text, font=font, fill=(bgr[2], bgr[1], bgr[0]))
+    img[y0:y1, x0:x1] = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+
+
 PENDING_BGR = (0, 140, 255)   # cam - trung voi the "Cho xac minh" tren giao dien
 CLASS_BGR = {"nut": (255, 255, 0), "screw": (255, 160, 80), "washer": (255, 255, 255)}
 
@@ -534,21 +602,14 @@ def annotate_result(frame, merged, res):
     counts, pend_c = res["counts"], res["counts_pending"]
 
     def cls_line(c, label):
-        extra = f"  (?{pend_c[c]})" if pend_c.get(c) else ""
+        extra = f"  (chờ {pend_c[c]})" if pend_c.get(c) else ""
         return (f"{label}: {counts.get(c, 0)}{extra}", CLASS_BGR[c])
 
-    lines = [(f"TOTAL: {res['total']}", (255, 255, 255)),
-             (f"CONFIRMED: {res['confirmed']}", (0, 255, 0)),
-             (f"PENDING: {res['pending']}", PENDING_BGR),
-             cls_line("nut", "NUT"), cls_line("screw", "SCREW"), cls_line("washer", "WASHER")]
-    fs, th, step = 0.75 * k, max(2, int(round(2 * k))), int(36 * k)
-    width = max(cv2.getTextSize(t, font, fs, th)[0][0] for t, _ in lines) + int(26 * k)
-    overlay = annotated.copy()
-    cv2.rectangle(overlay, (int(15 * k), int(10 * k)),
-                  (int(15 * k) + width, int(20 * k) + step * len(lines)), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.65, annotated, 0.35, 0, annotated)
-    for i, (line, color) in enumerate(lines):
-        cv2.putText(annotated, line, (int(28 * k), int(43 * k) + i * step), font, fs, color, th, cv2.LINE_AA)
+    lines = [(f"Tổng phát hiện: {res['total']}", (255, 255, 255)),
+             (f"Đã xác nhận: {res['confirmed']}", (0, 255, 0)),
+             (f"Chờ xác minh: {res['pending']}", PENDING_BGR),
+             cls_line("nut", "Đai ốc"), cls_line("screw", "Ốc vít"), cls_line("washer", "Long đền")]
+    draw_summary_panel(annotated, lines, k)
     return annotated, lines
 
 
