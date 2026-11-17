@@ -2,16 +2,30 @@
 """
 He thong dem nut / screw / washer - YOLO26n + Hikvision RTSP.
 
-Ban nang cap giu nguyen: Flask API, RTSP Channel 101, preview + vien ROI,
-countdown 3s, 5 frame, luu ket qua + review.
+Giu nguyen: Flask API, RTSP Channel 101, preview + vien ROI, countdown 3s, 5 frame,
+luu ket qua + review, giao dien /pick.
 
-Bien moi truong (de A/B ma khong sua code):
-  COUNT_PROFILE   baseline | v2 (mac dinh v2)
+Profile (COUNT_PROFILE):
+  baseline : hanh vi cu
+  v2       : nguong thap + xac nhan theo track
+  v3       : (MAC DINH) v2 + sua cac loi gop nham vat giao nhau:
+             - geo_dedup: chi loai box gan nhu TRUNG HET (IoU cao + tam/kich thuoc gan nhau)
+               va co bang chung pixel (khong phai hinh chu X) -> khong gop vit chong cheo
+             - nhanh one-to-one (NMS-free) cua YOLO26 (tu nhan dien tham so theo phien ban Ultralytics)
+             - 5 frame chay o 5 imgsz khac nhau (da dang hoa, tong compute gan nhu khong doi)
+             - ghep frame bang Hungarian + chi phi hinh hoc (IoU + khoang cach tam + ti le kich thuoc)
+             - refine_suspects: box to bat thuong -> suy luan lai tren vung crop phong lon;
+               ket qua tach luon o trang thai "cho xac minh" (cam), khong tu tang so "da xac nhan"
+
+Bien moi truong (A/B ma khong sua code):
+  COUNT_PROFILE   baseline | v2 | v3 (mac dinh v3)
   COUNT_DEBUG     1 = luu 5 frame RAW + JSON chi tiet moi phien + log tung buoc
-  CONF_LOW        nguong YOLO cho profile v2 (mac dinh 0.30)
-  SHAPE_CORRECT   1 = cho phep OpenCV doi class nut<->washer (mac dinh 0 o v2)
-  IMAGE_SIZE, USE_PREPROCESS, AGNOSTIC_NMS  de thu nghiem imgsz / CLAHE / NMS
-  CAMERA_IP, CAMERA_USERNAME, CAMERA_PASSWORD, RTSP_PORT
+  CONF_LOW        nguong YOLO cho v2/v3 (mac dinh 0.30)
+  SHAPE_CORRECT   1 = cho phep OpenCV doi class nut<->washer (mac dinh 0)
+  IMAGE_SIZE, USE_PREPROCESS, AGNOSTIC_NMS, NMS_IOU
+  SCALES          vd "1280,1600,1920,1600,1280" (rong = tat da scale)
+  REFINE          1/0 bat tat re-inference vung nghi ngo (v3)
+  CAMERA_IP, CAMERA_USERNAME, CAMERA_PASSWORD (BAT BUOC dat bang bien moi truong), RTSP_PORT
 """
 import os
 # TCP cho RTSP: tranh mat goi UDP gay vo hinh/nhay frame. Phai dat truoc khi import cv2.
@@ -35,6 +49,10 @@ try:
     from PIL import Image, ImageDraw, ImageFont   # ve chu tieng Viet co dau (cv2.putText khong ho tro)
 except ImportError:                               # thieu Pillow -> tu dong dung chu khong dau
     np = Image = ImageDraw = ImageFont = None
+try:
+    from scipy.optimize import linear_sum_assignment   # di kem Ultralytics
+except ImportError:
+    linear_sum_assignment = None
 from ultralytics import YOLO
 
 app = Flask(__name__)
@@ -43,6 +61,16 @@ app = Flask(__name__)
 def _env_bool(name, default):
     v = os.getenv(name)
     return default if v is None else v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int_list(name, default):
+    v = os.getenv(name)
+    if v is None:
+        return default
+    try:
+        return [int(x) for x in v.split(",") if x.strip()]
+    except ValueError:
+        return default
 
 
 def log(msg):
@@ -55,11 +83,11 @@ def log(msg):
 # ==================================================
 # 1. CAU HINH
 # ==================================================
-MODEL_PATH = Path(__file__).resolve().parent / "best3.pt"
+MODEL_PATH = Path(__file__).resolve().parent / "best.pt"
 
 CAMERA_IP = os.getenv("CAMERA_IP", "192.168.1.233")
 CAMERA_USERNAME = os.getenv("CAMERA_USERNAME", "admin")
-# KHONG hard-code mat khau trong source. Dat bang: setx CAMERA_PASSWORD "..."
+# KHONG hard-code mat khau trong source. Dat bang: setx CAMERA_PASSWORD "..."  (roi mo lai terminal)
 CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "Ngan@nhphat2026")
 RTSP_PORT = int(os.getenv("RTSP_PORT", "554"))
 RTSP_URL = (
@@ -69,25 +97,44 @@ RTSP_URL = (
 RTSP_RECONNECT_DELAY = 2.0
 PREVIEW_FPS = 20.0
 
-PROFILE = os.getenv("COUNT_PROFILE", "v2").strip().lower()
+PROFILE = os.getenv("COUNT_PROFILE", "v3").strip().lower()
 DEBUG = _env_bool("COUNT_DEBUG", False)
 
 CONFIDENCE = 0.5                      # nguong "da xac nhan" tu dong
-CONF_LOW = float(os.getenv("CONF_LOW", "0.30"))   # nguong suy luan cua profile v2
+CONF_LOW = float(os.getenv("CONF_LOW", "0.30"))   # nguong suy luan cua profile v2/v3
 RECOVER_MIN_OBS = 3                   # track conf thap can xuat hien >= 3/5 frame
 RECOVER_MIN_MEAN = 0.40               # va conf trung binh >= 0.40
 IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "1600"))
 USE_PREPROCESS = _env_bool("USE_PREPROCESS", True)
-AGNOSTIC_NMS = _env_bool("AGNOSTIC_NMS", True)
+AGNOSTIC_NMS = _env_bool("AGNOSTIC_NMS", False)
+NMS_IOU = float(os.getenv("NMS_IOU", "0.5"))       # chi co tac dung khi model chay che do NMS
+SCALES = _env_int_list("SCALES", [1280, 1600, 1920, 1600, 1280])   # v3: imgsz moi frame
+REFINE = _env_bool("REFINE", True)
 
 USE_ROI = True
-ROI_X1, ROI_Y1, ROI_X2, ROI_Y2 = 0.10, 0.10, 0.90, 0.85
+ROI_X1, ROI_Y1, ROI_X2, ROI_Y2 = 0.05, 0.10, 0.95, 0.85
 
 USE_SHAPE_CHECK = True
 SHAPE_DEBUG = True
-SHAPE_CORRECT = _env_bool("SHAPE_CORRECT", False)  # chi ap dung cho profile v2
+SHAPE_CORRECT = _env_bool("SHAPE_CORRECT", False)  # chi ap dung cho profile v2/v3
 SHAPE_MIN_SIZE = 18
-DEDUP_IOU = 0.65
+DEDUP_IOU = 0.65                                   # dedup cu (baseline / v2)
+
+# ---- v3: geometry-aware dedup (can hieu chinh theo du lieu that) ----
+DUP_IOU_SAME = 0.85     # cung class: chi coi la trung khi IoU >= nguong nay ...
+DUP_CDIST = 0.08        # ... VA khoang cach tam / duong cheo nho nhat <= nguong nay ...
+DUP_SIZE = 0.80         # ... VA ti le dien tich nho/lon >= nguong nay
+DUP_IOU_CROSS = 0.80    # khac class cung 1 vat (vd nut/washer nham nhau)
+FILL_X_MAX = 0.45       # minAreaRect fill < nguong -> hinh chu X / nhieu vat (phu quyet dedup)
+
+# ---- v3: ghep frame bang Hungarian ----
+MATCH_MAX_COST = 0.90
+_BIG = 1e6
+
+# ---- v3: re-inference vung nghi ngo ----
+REFINE_IMGSZ = 960
+MAX_REFINE = 6
+SUSPECT_AREA_K = 1.6    # box screw > 1.6 x trung vi dien tich screw cua phien -> nghi gop
 
 COUNTDOWN_SECONDS = 3
 SAMPLE_COUNT = 5
@@ -110,6 +157,26 @@ if not MODEL_PATH.exists():
 
 model = YOLO(str(MODEL_PATH))
 lock = Lock()
+
+
+def detect_e2e_kwargs():
+    """Tham so bat nhanh one-to-one (NMS-free) cua YOLO26 - tuy phien ban Ultralytics:
+    ban moi: nms=False ; ban cu: end2end=True. Tra {} neu khong nhan dien duoc."""
+    try:
+        import numpy as _np
+        dummy = _np.zeros((64, 64, 3), _np.uint8)
+    except Exception:
+        return {}
+    for kw in ({"nms": False}, {"end2end": True}):
+        try:
+            model.predict(dummy, imgsz=64, verbose=False, **kw)
+            return kw
+        except Exception:
+            continue
+    return {}
+
+
+E2E_KW = detect_e2e_kwargs()
 
 camera_enabled = False
 camera_ready = False
@@ -141,14 +208,20 @@ last_sample_time = 0.0
 
 
 def make_cfg(profile=None, **override):
-    """baseline = hanh vi cu; v2 = nguong thap + xac nhan theo track, OpenCV chi canh bao."""
+    """baseline = hanh vi cu; v2 = nguong thap + xac nhan theo track;
+    v3 = v2 + geo-dedup + NMS-free + da scale + Hungarian + refine."""
     profile = (profile or PROFILE).lower()
     cfg = dict(name=profile, conf_infer=CONFIDENCE, recover=False,
                shape_correct=True, legacy_merge=True,
-               preprocess=USE_PREPROCESS, imgsz=IMAGE_SIZE, agnostic=AGNOSTIC_NMS)
+               preprocess=USE_PREPROCESS, imgsz=IMAGE_SIZE, agnostic=AGNOSTIC_NMS,
+               nms_iou=NMS_IOU, geo=False, nms_free=False, scales=None,
+               hungarian=False, refine=False)
     if profile != "baseline":
         cfg.update(conf_infer=min(CONFIDENCE, CONF_LOW), recover=True,
                    shape_correct=SHAPE_CORRECT, legacy_merge=False)
+    if profile == "v3":
+        cfg.update(geo=True, nms_free=True, scales=(SCALES or None),
+                   hungarian=True, refine=REFINE)
     cfg.update(override)
     return cfg
 
@@ -223,7 +296,7 @@ def get_roi_px(w, h):
 
 
 def deduplicate(detections, threshold=DEDUP_IOU, log_list=None, stage="dedup"):
-    """Greedy NMS khong phan biet class (giu nhu cu), nhung ghi lai box bi loai + ly do."""
+    """(baseline/v2) Greedy NMS khong phan biet class, ghi lai box bi loai + ly do."""
     ordered = sorted(detections, key=lambda d: d["confidence"], reverse=True)
     kept = []
     for item in ordered:
@@ -241,21 +314,92 @@ def deduplicate(detections, threshold=DEDUP_IOU, log_list=None, stage="dedup"):
     return kept
 
 
+# ---------- v3: geometry-aware dedup ----------
+def pair_metrics(a, b):
+    """(iou, khoang cach tam chuan hoa theo duong cheo nho nhat, ti le dien tich nho/lon)."""
+    iou = calculate_iou(a, b)
+    aw, ah, bw, bh = a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1]
+    dist = math.hypot((a[0] + a[2] - b[0] - b[2]) / 2.0, (a[1] + a[3] - b[1] - b[3]) / 2.0)
+    diag = max(min(math.hypot(aw, ah), math.hypot(bw, bh)), 1e-6)
+    size = min(aw * ah, bw * bh) / max(aw * ah, bw * bh, 1e-6)
+    return iou, dist / diag, size
+
+
+def looks_like_two_objects(frame, a, b):
+    """Vung hop cua 2 box co hinh chu X / nhieu vat khong? (minAreaRect fill thap).
+    CHI dung lam 'phu quyet dedup' cho cap box gan nhu trung nhau, nen sai so nghieng ve giu lai
+    (va phien dem bi gan co review 'kept_overlap_pair')."""
+    if frame is None or np is None:
+        return False
+    h, w = frame.shape[:2]
+    x1, y1 = max(0, int(min(a[0], b[0]))), max(0, int(min(a[1], b[1])))
+    x2, y2 = min(w, int(max(a[2], b[2]))), min(h, int(max(a[3], b[3])))
+    roi = frame[y1:y2, x1:x2]
+    if roi.size == 0 or min(roi.shape[:2]) < 12:
+        return False
+    gray = cv2.GaussianBlur(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), (3, 3), 0)
+    _, m = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if m.mean() / 255.0 > 0.5:            # vat the la phan nho hon cua ROI
+        m = 255 - m
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return False
+    c = max(cnts, key=cv2.contourArea)
+    (_, _), (rw, rh), _ = cv2.minAreaRect(c)
+    fill = cv2.contourArea(c) / max(rw * rh, 1.0)
+    return fill < FILL_X_MAX              # 1 vit don: fill cao; chu X: fill thap
+
+
+def geo_dedup(dets, frame=None, log_list=None, stage="geo_dedup"):
+    """Chi loai box THUC SU trung (gan nhu giong het). Hai box chi giao nhau -> giu ca hai."""
+    kept = []
+    for d in sorted(dets, key=lambda x: x["confidence"], reverse=True):
+        drop = None
+        for k in kept:
+            iou, cd, size = pair_metrics(d["box"], k["box"])
+            if d["class_id"] == k["class_id"]:
+                dup = iou >= DUP_IOU_SAME and cd <= DUP_CDIST and size >= DUP_SIZE
+                if dup and looks_like_two_objects(frame, d["box"], k["box"]):
+                    dup = False
+                    d["kept_overlap_pair"] = True
+                    k["kept_overlap_pair"] = True
+            else:
+                dup = iou >= DUP_IOU_CROSS          # cung 1 vat bi gan 2 class
+            if dup:
+                drop = (k, iou)
+                break
+        if drop is None:
+            kept.append(d)
+        elif log_list is not None:
+            log_list.append({"stage": stage, "reason": f"near_identical iou={drop[1]:.2f}",
+                             "dropped": brief(d), "kept": brief(drop[0])})
+    return kept
+
+
 def predict_frame(frame, cfg, dropped, frame_index=0):
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = get_roi_px(w, h)
     crop = frame[y1:y2, x1:x2]
     source = preprocess_frame(crop) if cfg["preprocess"] else crop
-    result = model.predict(source=source, conf=cfg["conf_infer"], imgsz=cfg["imgsz"],
-                           agnostic_nms=cfg["agnostic"], iou=0.5, max_det=300, verbose=False)[0]
+    scales = cfg.get("scales")
+    imgsz = scales[frame_index % len(scales)] if scales else cfg["imgsz"]
+    kw = dict(source=source, conf=cfg["conf_infer"], imgsz=imgsz,
+              agnostic_nms=cfg["agnostic"], iou=cfg["nms_iou"], max_det=300, verbose=False)
+    if cfg.get("nms_free"):
+        kw.update(E2E_KW)
+    result = model.predict(**kw)[0]
     raw = get_detections(result)
     for det in raw:  # crop -> frame goc
         bx1, by1, bx2, by2 = det["box"]
         det["box"] = [bx1 + x1, by1 + y1, bx2 + x1, by2 + y1]
     local_drop = []
-    kept = deduplicate(raw, log_list=local_drop, stage=f"frame{frame_index + 1}_dedup")
+    if cfg.get("geo"):
+        kept = geo_dedup(raw, frame, local_drop, f"frame{frame_index + 1}_geo")
+    else:
+        kept = deduplicate(raw, log_list=local_drop, stage=f"frame{frame_index + 1}_dedup")
     dropped.extend(local_drop)
-    info = {"raw": len(raw), "kept": len(kept),
+    info = {"raw": len(raw), "kept": len(kept), "imgsz": imgsz,
             "low_conf": sum(1 for d in kept if d["confidence"] < CONFIDENCE),
             "dets": [brief(d) for d in kept] if DEBUG else None}
     return kept, info
@@ -340,8 +484,8 @@ def apply_shape_check(frame, detections, cfg):
 # 3. GHEP 5 FRAME
 # ==================================================
 def merge_detections_legacy(frame_detections, dropped):
-    """Giu nguyen logic cu (baseline). Luu y: nguong 'conf<0.60' khong bao gio xay ra
-    khi CONFIDENCE=0.6 vi moi detection da >=0.6."""
+    """Giu nguyen logic cu (baseline). Luu y: nguong 'conf<0.60' o day khong con y nghia
+    vi CONFIDENCE hien la 0.5 (moi detection da >= nguong infer)."""
     tracks = []
     for frame_index, detections in enumerate(frame_detections):
         used = set()
@@ -372,9 +516,8 @@ def merge_detections_legacy(frame_detections, dropped):
 
 
 def merge_detections_v2(frame_detections, cfg, dropped):
-    """Matching toan cuc theo IoU (cap IoU cao nhat truoc) -> khong phu thuoc thu tu duyet,
-    tot hon khi cac vat nam sat nhau. Track xac nhan neu:
-      - max conf >= CONFIDENCE (nhu baseline), HOAC
+    """Matching toan cuc theo IoU (cap IoU cao nhat truoc). Track xac nhan neu:
+      - max conf >= CONFIDENCE, HOAC
       - xuat hien >= RECOVER_MIN_OBS frame va conf TB >= RECOVER_MIN_MEAN (status=recovered)."""
     tracks = []
     for fi, dets in enumerate(frame_detections):
@@ -414,6 +557,73 @@ def merge_detections_v2(frame_detections, cfg, dropped):
     return deduplicate(merged, log_list=dropped, stage="post_merge_dedup")
 
 
+# ---------- v3: Hungarian + chi phi hinh hoc ----------
+def match_cost(det, ref):
+    """Chi phi ghep 1 detection voi 1 cum (box tham chieu = trung binh). None = khong the ghep.
+    Class khac chi bi PHAT mem (khong chan cung)."""
+    iou, cd, size = pair_metrics(det["box"], ref["box"])
+    if iou < 0.15 and cd > 0.35:
+        return None
+    cls_pen = 0.0 if det["class_id"] == ref["class_id"] else 0.4
+    return (1 - iou) + 0.5 * cd + 0.3 * (1 - size) + cls_pen
+
+
+def _assign(C):
+    """Tra ve list (hang, cot). Dung scipy neu co, neu khong thi greedy theo chi phi tang dan."""
+    if linear_sum_assignment is not None:
+        r, c = linear_sum_assignment(C)
+        return list(zip(r.tolist(), c.tolist()))
+    cells = sorted((C[i, j], i, j) for i in range(C.shape[0]) for j in range(C.shape[1]))
+    used_r, used_c, out = set(), set(), []
+    for _, i, j in cells:
+        if i not in used_r and j not in used_c:
+            used_r.add(i)
+            used_c.add(j)
+            out.append((i, j))
+    return out
+
+
+def merge_detections_v3(frame_detections, cfg, dropped, frame=None):
+    """Vat dung yen -> cum theo vi tri. Moi frame ghep MOT-MOT (Hungarian) nen hai vit cung frame
+    khong bao gio bi gop thanh mot. Doi cho 2 box gan trung nhau khong lam sai so dem."""
+    clusters = []
+    for fi, dets in enumerate(frame_detections):
+        matched = {}
+        if clusters and dets and np is not None:
+            C = np.full((len(dets), len(clusters)), _BIG)
+            for i, d in enumerate(dets):
+                for j, c in enumerate(clusters):
+                    cost = match_cost(d, c)
+                    if cost is not None and cost <= MATCH_MAX_COST:
+                        C[i, j] = cost
+            for i, j in _assign(C):
+                if C[i, j] < _BIG:
+                    matched[i] = j
+        for i, d in enumerate(dets):
+            if i in matched:
+                c = clusters[matched[i]]
+                c["obs"].append(d)
+                n = len(c["obs"])
+                c["box"] = [sum(o["box"][k] for o in c["obs"]) / n for k in range(4)]
+                c["class_id"] = max(c["obs"], key=lambda o: o["confidence"])["class_id"]
+            else:
+                clusters.append({"obs": [d], "box": list(d["box"]), "class_id": d["class_id"]})
+    merged = []
+    for c in clusters:
+        obs = c["obs"]
+        confs = [o["confidence"] for o in obs]
+        mx, mean = max(confs), sum(confs) / len(confs)
+        if mx >= CONFIDENCE:
+            merged.append(_finalize_track(obs, "confirmed"))
+        elif cfg["recover"] and len(obs) >= RECOVER_MIN_OBS and mean >= RECOVER_MIN_MEAN:
+            merged.append(_finalize_track(obs, "recovered"))
+        else:
+            dropped.append({"stage": "merge",
+                            "reason": f"unconfirmed(n={len(obs)},max={mx:.2f},mean={mean:.2f})",
+                            "dropped": brief(max(obs, key=lambda o: o["confidence"]))})
+    return geo_dedup(merged, frame, dropped, "post_merge_geo")
+
+
 def _finalize_track(obs, status):
     votes = defaultdict(float)
     for d in obs:
@@ -428,7 +638,57 @@ def _finalize_track(obs, status):
         "status": status,
         "class_share": votes[chosen] / sum(votes.values()),
         "votes": {cname(k): round(v, 3) for k, v in votes.items()},
+        "kept_overlap_pair": any(d.get("kept_overlap_pair") for d in obs),
     }
+
+
+# ---------- v3: re-inference vung nghi ngo ----------
+def refine_suspects(frame, merged, cfg, dropped):
+    """Box screw to bat thuong (nghi 2 vit bi gop) -> chay lai YOLO tren vung crop phong lon.
+    Neu detector tu tach duoc >=2 screw conf>=CONFIDENCE thi thay the, nhung danh dau
+    'recovered' (CHO XAC MINH) - khong tu tang so 'da xac nhan'. Toi da MAX_REFINE vung/phien."""
+    if not cfg.get("refine"):
+        return merged
+    screw_areas = sorted((d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1])
+                         for d in merged if cname(d["class_id"]) == "screw")
+    if len(screw_areas) < 3:
+        return merged
+    med = screw_areas[len(screw_areas) // 2]
+    H, W = frame.shape[:2]
+    out, n_ref = [], 0
+    for d in merged:
+        x1, y1, x2, y2 = d["box"]
+        area = (x2 - x1) * (y2 - y1)
+        suspect = cname(d["class_id"]) == "screw" and area > SUSPECT_AREA_K * med
+        if not suspect or n_ref >= MAX_REFINE:
+            out.append(d)
+            continue
+        n_ref += 1
+        pad = 0.15 * max(x2 - x1, y2 - y1)
+        cx1, cy1 = max(0, int(x1 - pad)), max(0, int(y1 - pad))
+        cx2, cy2 = min(W, int(x2 + pad)), min(H, int(y2 + pad))
+        if cx2 - cx1 < 8 or cy2 - cy1 < 8:
+            out.append(d)
+            continue
+        r = model.predict(frame[cy1:cy2, cx1:cx2], conf=cfg["conf_infer"], imgsz=REFINE_IMGSZ,
+                          max_det=50, verbose=False, **E2E_KW)[0]
+        subs = get_detections(r)
+        for s in subs:
+            s["box"] = [s["box"][0] + cx1, s["box"][1] + cy1, s["box"][2] + cx1, s["box"][3] + cy1]
+        subs = geo_dedup([s for s in subs if cname(s["class_id"]) == "screw"], frame)
+        # chi giu cac box co tam nam trong box nghi ngo goc
+        subs = [s for s in subs
+                if x1 <= (s["box"][0] + s["box"][2]) / 2 <= x2 and y1 <= (s["box"][1] + s["box"][3]) / 2 <= y2]
+        if len(subs) >= 2 and all(s["confidence"] >= CONFIDENCE for s in subs):
+            for s in subs:
+                s.update(status="recovered", observations=1, class_share=1.0,
+                         votes={"screw": round(s["confidence"], 3)}, from_refine=True)
+                out.append(s)
+            dropped.append({"stage": "refine", "reason": f"split_into_{len(subs)}", "dropped": brief(d)})
+            log(f"[REFINE] box {brief(d)['box']} tach thanh {len(subs)} screw (cho xac minh)")
+        else:
+            out.append(d)
+    return out
 
 
 def review_reasons_for_session(frame_detections, merged_before_shape, merged_after_shape):
@@ -446,6 +706,10 @@ def review_reasons_for_session(frame_detections, merged_before_shape, merged_aft
             reasons.append(f"recovered_low_conf:object_{idx}:{name}:{det['confidence']:.3f}")
         if det.get("class_share", 1.0) < CLASS_SHARE_REVIEW:
             reasons.append(f"class_unstable:object_{idx}:{det['votes']}")
+        if det.get("kept_overlap_pair"):
+            reasons.append(f"kept_overlap_pair:object_{idx}:{name}")
+        if det.get("from_refine"):
+            reasons.append(f"split_suspect:object_{idx}:{name}")
         if REVIEW_ON_SHAPE_DISAGREEMENT and det.get("shape"):
             if det["shape"]["class"] != det.get("original_class"):
                 reasons.append(f"shape_disagreement:object_{idx}")
@@ -463,7 +727,7 @@ def review_reasons_for_session(frame_detections, merged_before_shape, merged_aft
 
 
 def run_counting_pipeline(frames, cfg=None):
-    """Pipeline thuan (khong dung camera/Flask) -> dung chung cho app va eval_offline.py."""
+    """Pipeline thuan (khong dung camera/Flask) -> dung chung cho app va cac script offline."""
     cfg = cfg or make_cfg()
     dropped, per_frame, frame_dets = [], [], []
     t0 = time.perf_counter()
@@ -471,12 +735,20 @@ def run_counting_pipeline(frames, cfg=None):
         dets, info = predict_frame(frame, cfg, dropped, frame_index=i)
         frame_dets.append(dets)
         per_frame.append(info)
-        log(f"[FRAME {i + 1}/{len(frames)}] raw={info['raw']} after_dedup={info['kept']} "
-            f"below_{CONFIDENCE}={info['low_conf']}")
+        log(f"[FRAME {i + 1}/{len(frames)}] imgsz={info['imgsz']} raw={info['raw']} "
+            f"after_dedup={info['kept']} below_{CONFIDENCE}={info['low_conf']}")
     t_infer = time.perf_counter() - t0
 
-    merged = (merge_detections_legacy(frame_dets, dropped) if cfg["legacy_merge"]
-              else merge_detections_v2(frame_dets, cfg, dropped))
+    best_frame, best_index, scores = select_best_frame(frames)   # can truoc khi ghep (geo-dedup dung anh)
+
+    if cfg["legacy_merge"]:
+        merged = merge_detections_legacy(frame_dets, dropped)
+    elif cfg.get("hungarian"):
+        merged = merge_detections_v3(frame_dets, cfg, dropped, best_frame)
+    else:
+        merged = merge_detections_v2(frame_dets, cfg, dropped)
+    merged = refine_suspects(best_frame, merged, cfg, dropped)
+
     n_rec = sum(1 for d in merged if d.get("status") == "recovered")
     log(f"[MERGE] profile={cfg['name']} tracks_final={len(merged)} recovered={n_rec} "
         f"dropped={len(dropped)} infer={t_infer:.2f}s")
@@ -484,12 +756,10 @@ def run_counting_pipeline(frames, cfg=None):
         for item in dropped:
             log(f"[DROP] {item['stage']} {item['reason']} {item['dropped']}")
 
-    best_frame, best_index, scores = select_best_frame(frames)
     baseline = [dict(d) for d in merged]
     final = apply_shape_check(best_frame, merged, cfg)
     reasons = review_reasons_for_session(frame_dets, baseline, final)
-    # 3 con so: tong phat hien = da xac nhan (tu dong) + cho xac minh (conf thap, can nguoi kiem tra).
-    # counts = so luong TUNG LOAI cua tat ca vat phat hien (giu nhu ban cu); kem phan tach xac nhan/cho.
+    # tong phat hien = da xac nhan (tu dong) + cho xac minh (conf thap / tach tu refine, can nguoi kiem tra).
     counts = Counter(cname(d["class_id"]) for d in final)
     counts_confirmed = Counter(cname(d["class_id"]) for d in final if d.get("status") != "recovered")
     counts_pending = Counter(cname(d["class_id"]) for d in final if d.get("status") == "recovered")
@@ -581,7 +851,7 @@ def pending_items(merged):
 
 
 def annotate_result(frame, merged, res):
-    """Xanh la = da xac nhan; CAM + nhan '?n' = cho xac minh (conf thap)."""
+    """Xanh la = da xac nhan; CAM + nhan '?n' = cho xac minh (conf thap / tach tu refine)."""
     annotated = frame.copy()
     k = max(1.0, frame.shape[1] / 1920.0)       # anh 4K -> chu va net ve to hon cho de doc
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -620,7 +890,10 @@ def build_report(res, filename, frame_shape):
     report = {
         "result_filename": filename, "time": datetime.now().isoformat(timespec="seconds"),
         "profile": cfg["name"], "params": {k: cfg[k] for k in cfg},
+        "e2e_kwargs": E2E_KW,
         "confidence_final": CONFIDENCE, "dedup_iou": DEDUP_IOU, "merge_iou": IOU_THRESHOLD,
+        "geo_dedup": {"iou_same": DUP_IOU_SAME, "cdist": DUP_CDIST, "size": DUP_SIZE,
+                      "iou_cross": DUP_IOU_CROSS, "fill_x_max": FILL_X_MAX},
         "roi_px": [x1, y1, x2, y2], "frame_size": [w, h],
         "counts": dict(res["counts"]), "counts_confirmed": dict(res["counts_confirmed"]),
         "counts_pending": dict(res["counts_pending"]),
@@ -632,7 +905,9 @@ def build_report(res, filename, frame_shape):
         "objects": [{**brief(d), "status": d.get("status"), "obs": d.get("observations"),
                      "class_share": round(d.get("class_share", 1.0), 3), "votes": d.get("votes"),
                      "original_class": d.get("original_class"), "shape": d.get("shape"),
-                     "shape_changed_class": d.get("shape_changed_class", False)}
+                     "shape_changed_class": d.get("shape_changed_class", False),
+                     "kept_overlap_pair": d.get("kept_overlap_pair", False),
+                     "from_refine": d.get("from_refine", False)}
                     for d in res["merged"]],
         "per_frame": [{k: v for k, v in i.items() if k != "dets"} for i in res["per_frame"]],
         "dropped_count": len(res["dropped"]),
@@ -782,7 +1057,7 @@ def camera_worker():
                     break
 
             if cap is None or not cap.isOpened():
-                ready_reported = False   # FIX: truoc day khong reset -> sau khi rot mang camera_ready khong bao gio True lai
+                ready_reported = False   # reset de camera_ready bat lai duoc sau khi rot mang
                 with lock:
                     camera_ready = False
                     camera_status = "Đang kết nối camera IP..."
@@ -1049,6 +1324,12 @@ def latest_raw():
 
 
 if __name__ == "__main__":
-    log(f"[BOOT] profile={PROFILE} debug={DEBUG} imgsz={IMAGE_SIZE} preprocess={USE_PREPROCESS} "
-        f"conf_infer={make_cfg()['conf_infer']} shape_correct={make_cfg()['shape_correct']}")
+    cfg0 = make_cfg()
+    log(f"[BOOT] profile={PROFILE} debug={DEBUG} imgsz={IMAGE_SIZE} scales={cfg0['scales']} "
+        f"preprocess={USE_PREPROCESS} conf_infer={cfg0['conf_infer']} "
+        f"shape_correct={cfg0['shape_correct']} geo={cfg0['geo']} refine={cfg0['refine']} "
+        f"e2e_kwargs={E2E_KW}")
+    if cfg0["nms_free"] and not E2E_KW:
+        log("[BOOT][WARN] Khong nhan dien duoc tham so NMS-free (nms=False / end2end=True) - "
+            "v3 se chay voi che do mac dinh cua model.")
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
