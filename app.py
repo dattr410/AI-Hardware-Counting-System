@@ -88,7 +88,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "best.pt"
 CAMERA_IP = os.getenv("CAMERA_IP", "192.168.1.233")
 CAMERA_USERNAME = os.getenv("CAMERA_USERNAME", "admin")
 # KHONG hard-code mat khau trong source. Dat bang: setx CAMERA_PASSWORD "..."  (roi mo lai terminal)
-CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "Ngan@nhphat2026")
+CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "")
 RTSP_PORT = int(os.getenv("RTSP_PORT", "554"))
 RTSP_URL = (
     f"rtsp://{quote(CAMERA_USERNAME, safe='')}:{quote(CAMERA_PASSWORD, safe='')}"

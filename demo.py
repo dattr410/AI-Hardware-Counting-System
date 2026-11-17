@@ -18,7 +18,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "best3.pt"
 
 CAMERA_INDEX = 0
 CONFIDENCE = 0.6
-IMAGE_SIZE = 1600
+IMAGE_SIZE = 1280
 USE_PREPROCESS = True
 USE_SHAPE_CHECK = True 
 SHAPE_DEBUG = True  # In thong tin contour cua TAT CA nut/washer
