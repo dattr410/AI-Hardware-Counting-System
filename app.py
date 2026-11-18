@@ -1,32 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-He thong dem nut / screw / washer - YOLO26n + Hikvision RTSP.
-
-Giu nguyen: Flask API, RTSP Channel 101, preview + vien ROI, countdown 3s, 5 frame,
-luu ket qua + review, giao dien /pick.
-
-Profile (COUNT_PROFILE):
-  baseline : hanh vi cu
-  v2       : nguong thap + xac nhan theo track
-  v3       : (MAC DINH) v2 + sua cac loi gop nham vat giao nhau:
-             - geo_dedup: chi loai box gan nhu TRUNG HET (IoU cao + tam/kich thuoc gan nhau)
-               va co bang chung pixel (khong phai hinh chu X) -> khong gop vit chong cheo
-             - nhanh one-to-one (NMS-free) cua YOLO26 (tu nhan dien tham so theo phien ban Ultralytics)
-             - 5 frame chay o 5 imgsz khac nhau (da dang hoa, tong compute gan nhu khong doi)
-             - ghep frame bang Hungarian + chi phi hinh hoc (IoU + khoang cach tam + ti le kich thuoc)
-             - refine_suspects: box to bat thuong -> suy luan lai tren vung crop phong lon;
-               ket qua tach luon o trang thai "cho xac minh" (cam), khong tu tang so "da xac nhan"
-
-Bien moi truong (A/B ma khong sua code):
-  COUNT_PROFILE   baseline | v2 | v3 (mac dinh v3)
-  COUNT_DEBUG     1 = luu 5 frame RAW + JSON chi tiet moi phien + log tung buoc
-  CONF_LOW        nguong YOLO cho v2/v3 (mac dinh 0.30)
-  SHAPE_CORRECT   1 = cho phep OpenCV doi class nut<->washer (mac dinh 0)
-  IMAGE_SIZE, USE_PREPROCESS, AGNOSTIC_NMS, NMS_IOU
-  SCALES          vd "1280,1600,1920,1600,1280" (rong = tat da scale)
-  REFINE          1/0 bat tat re-inference vung nghi ngo (v3)
-  CAMERA_IP, CAMERA_USERNAME, CAMERA_PASSWORD (BAT BUOC dat bang bien moi truong), RTSP_PORT
-"""
 import os
 # TCP cho RTSP: tranh mat goi UDP gay vo hinh/nhay frame. Phai dat truoc khi import cv2.
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
@@ -88,7 +59,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "best.pt"
 CAMERA_IP = os.getenv("CAMERA_IP", "192.168.1.233")
 CAMERA_USERNAME = os.getenv("CAMERA_USERNAME", "admin")
 # KHONG hard-code mat khau trong source. Dat bang: setx CAMERA_PASSWORD "..."  (roi mo lai terminal)
-CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "")
+CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", "") # điền mật khẩu camera vào biến môi trường CAMERA_PASSWORD
 RTSP_PORT = int(os.getenv("RTSP_PORT", "554"))
 RTSP_URL = (
     f"rtsp://{quote(CAMERA_USERNAME, safe='')}:{quote(CAMERA_PASSWORD, safe='')}"
