@@ -34,6 +34,13 @@ def _env_bool(name, default):
     return default if v is None else v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, default))
+    except ValueError:
+        return default
+
+
 def _env_int_list(name, default):
     v = os.getenv(name)
     if v is None:
@@ -67,19 +74,22 @@ RTSP_URL = (
 )
 RTSP_RECONNECT_DELAY = 2.0
 PREVIEW_FPS = 20.0
+PREVIEW_MAX_W = 1280                  # preview thu nho truoc khi encode JPEG -> do ton CPU cua luong doc camera
 
-PROFILE = os.getenv("COUNT_PROFILE", "v3").strip().lower()
+# v4 la profile mac dinh (on dinh hoa). v3 = hanh vi cu, giu lai de so sanh A/B: COUNT_PROFILE=v3
+PROFILE = os.getenv("COUNT_PROFILE", "v4").strip().lower()
 DEBUG = _env_bool("COUNT_DEBUG", False)
 
 CONFIDENCE = 0.5                      # nguong "da xac nhan" tu dong
-CONF_LOW = float(os.getenv("CONF_LOW", "0.30"))   # nguong suy luan cua profile v2/v3
+CONF_LOW = float(os.getenv("CONF_LOW", "0.30"))   # nguong suy luan cua profile v2/v3/v4
 RECOVER_MIN_OBS = 3                   # track conf thap can xuat hien >= 3/5 frame
 RECOVER_MIN_MEAN = 0.40               # va conf trung binh >= 0.40
 IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "1600"))
 USE_PREPROCESS = _env_bool("USE_PREPROCESS", True)
 AGNOSTIC_NMS = _env_bool("AGNOSTIC_NMS", False)
 NMS_IOU = float(os.getenv("NMS_IOU", "0.5"))       # chi co tac dung khi model chay che do NMS
-SCALES = _env_int_list("SCALES", [1280, 1600, 1920, 1600, 1280])   # v3: imgsz moi frame
+SCALES = _env_int_list("SCALES", [1280, 1600, 1920, 1600, 1280])   # CHI v3: imgsz moi frame
+SCALES_V4 = _env_int_list("SCALES_V4", [])          # v4: rong = 1 imgsz co dinh (IMAGE_SIZE) cho moi frame
 REFINE = _env_bool("REFINE", True)
 
 USE_ROI = True
@@ -87,22 +97,28 @@ ROI_X1, ROI_Y1, ROI_X2, ROI_Y2 = 0.05, 0.10, 0.95, 0.85
 
 USE_SHAPE_CHECK = True
 SHAPE_DEBUG = True
-SHAPE_CORRECT = _env_bool("SHAPE_CORRECT", False)  # chi ap dung cho profile v2/v3
+SHAPE_CORRECT = _env_bool("SHAPE_CORRECT", False)  # chi ap dung cho profile v2/v3/v4
 SHAPE_MIN_SIZE = 18
 DEDUP_IOU = 0.65                                   # dedup cu (baseline / v2)
 
-# ---- v3: geometry-aware dedup (can hieu chinh theo du lieu that) ----
+# ---- geometry-aware dedup (can hieu chinh theo du lieu that) ----
 DUP_IOU_SAME = 0.85     # cung class: chi coi la trung khi IoU >= nguong nay ...
 DUP_CDIST = 0.08        # ... VA khoang cach tam / duong cheo nho nhat <= nguong nay ...
 DUP_SIZE = 0.80         # ... VA ti le dien tich nho/lon >= nguong nay
 DUP_IOU_CROSS = 0.80    # khac class cung 1 vat (vd nut/washer nham nhau)
 FILL_X_MAX = 0.45       # minAreaRect fill < nguong -> hinh chu X / nhieu vat (phu quyet dedup)
+OVERLAP_VETO = _env_bool("OVERLAP_VETO", True)   # tat = near-identical same-class luon bi coi la trung
 
-# ---- v3: ghep frame bang Hungarian ----
+# ---- ghep frame bang Hungarian ----
 MATCH_MAX_COST = 0.90
 _BIG = 1e6
+# v4: vat dung yen -> cong ghep chat hon v3 (v3 chi chan khi iou<0.15 va cd>0.35)
+MATCH_MIN_IOU = 0.30          # cung class
+MATCH_MIN_IOU_CROSS = 0.50    # khac class: chi ghep khi gan nhu cung 1 vat (nut<->washer lat class)
+MATCH_MIN_SIZE = 0.40         # ti le dien tich nho/lon toi thieu
+MIN_CONFIRM_FRAC = 0.60       # v4: "da xac nhan" can thay >= 60% so frame (5 frame -> 3)
 
-# ---- v3: re-inference vung nghi ngo ----
+# ---- re-inference vung nghi ngo ----
 REFINE_IMGSZ = 960
 MAX_REFINE = 6
 SUSPECT_AREA_K = 1.6    # box screw > 1.6 x trung vi dien tich screw cua phien -> nghi gop
@@ -111,6 +127,12 @@ COUNTDOWN_SECONDS = 3
 SAMPLE_COUNT = 5
 SAMPLE_INTERVAL = 0.15
 IOU_THRESHOLD = 0.30
+
+# ---- v4: thu frame on dinh ----
+SETTLE_SECONDS = _env_float("SETTLE_SECONDS", 0.4)   # bo qua frame ngay sau countdown (decoder/AE on dinh)
+SAMPLE_TIMEOUT = _env_float("SAMPLE_TIMEOUT", 8.0)   # qua thoi gian nay thi khong cho canh yen nua
+MOTION_MAX = _env_float("MOTION_MAX", 3.0)           # |diff| TB (muc xam, anh 320px) giua 2 frame lien tiep -> dang chuyen dong
+EXPOSURE_DRIFT = _env_float("EXPOSURE_DRIFT", 0.03)  # do sang TB lech > 3% giua cac frame -> canh bao
 
 SAVE_DIR = Path(__file__).resolve().parent / "static" / "saved_images"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -131,23 +153,31 @@ lock = Lock()
 
 
 def detect_e2e_kwargs():
-    """Tham so bat nhanh one-to-one (NMS-free) cua YOLO26 - tuy phien ban Ultralytics:
-    ban moi: nms=False ; ban cu: end2end=True. Tra {} neu khong nhan dien duoc."""
+    """Tham so ep che do one-to-one (NMS-free) cua YOLO26.
+    SUA: ban cu thu predict(nms=False) roi predict(end2end=True) tren anh den; nhung `nms` la tham so EXPORT
+    hop le trong cfg Ultralytics nen predict(nms=False) KHONG nem loi -> ham luon tra {'nms': False}
+    du no khong lam gi o predict. Ban moi doc DEFAULT_CFG_DICT: chi tra {'end2end': True} khi key do ton tai,
+    nguoc lai tra {} (dung mac dinh cua model; YOLO26 .pt mac dinh da la head end2end). Xem log [BOOT]."""
+    info = {}
+    keys = set()
     try:
-        import numpy as _np
-        dummy = _np.zeros((64, 64, 3), _np.uint8)
+        import ultralytics
+        from ultralytics.cfg import DEFAULT_CFG_DICT
+        info["ultralytics"] = getattr(ultralytics, "__version__", "?")
+        keys = set(DEFAULT_CFG_DICT)
     except Exception:
-        return {}
-    for kw in ({"nms": False}, {"end2end": True}):
-        try:
-            model.predict(dummy, imgsz=64, verbose=False, **kw)
-            return kw
-        except Exception:
-            continue
-    return {}
+        pass
+    try:
+        info["head_end2end"] = getattr(model.model.model[-1], "end2end", None)
+    except Exception:
+        info["head_end2end"] = None
+    kw = {"end2end": True} if "end2end" in keys else {}
+    info["end2end_in_cfg"] = "end2end" in keys
+    info["nms_in_cfg(export-only)"] = "nms" in keys
+    return kw, info
 
 
-E2E_KW = detect_e2e_kwargs()
+E2E_KW, E2E_INFO = detect_e2e_kwargs()
 
 camera_enabled = False
 camera_ready = False
@@ -175,24 +205,33 @@ latest_review_reasons = []
 latest_report = None
 
 sample_frames = []
+sample_meta = []
+sample_info = {"restarts": 0, "duplicates": 0, "flags": []}
+sampling_t0 = 0.0
+prev_sig = None
 last_sample_time = 0.0
 
 
 def make_cfg(profile=None, **override):
     """baseline = hanh vi cu; v2 = nguong thap + xac nhan theo track;
-    v3 = v2 + geo-dedup + NMS-free + da scale + Hungarian + refine."""
+    v3 = v2 + geo-dedup + NMS-free + da scale + Hungarian + refine;
+    v4 = v3 + imgsz co dinh + cong ghep chat + xac nhan theo SO FRAME (khong theo max conf)
+         + refine dong thuan nhieu frame + trace day du."""
     profile = (profile or PROFILE).lower()
     cfg = dict(name=profile, conf_infer=CONFIDENCE, recover=False,
                shape_correct=True, legacy_merge=True,
                preprocess=USE_PREPROCESS, imgsz=IMAGE_SIZE, agnostic=AGNOSTIC_NMS,
                nms_iou=NMS_IOU, geo=False, nms_free=False, scales=None,
-               hungarian=False, refine=False)
+               hungarian=False, refine=False, stable=False)
     if profile != "baseline":
         cfg.update(conf_infer=min(CONFIDENCE, CONF_LOW), recover=True,
                    shape_correct=SHAPE_CORRECT, legacy_merge=False)
     if profile == "v3":
         cfg.update(geo=True, nms_free=True, scales=(SCALES or None),
                    hungarian=True, refine=REFINE)
+    if profile == "v4":
+        cfg.update(geo=True, nms_free=True, scales=(SCALES_V4 or None),
+                   hungarian=True, refine=REFINE, stable=True)
     cfg.update(override)
     return cfg
 
@@ -202,8 +241,19 @@ def cname(class_id):
 
 
 def brief(d):
-    return {"class": cname(d["class_id"]), "conf": round(d["confidence"], 3),
-            "box": [int(round(v)) for v in d["box"]]}
+    out = {"class": cname(d["class_id"]), "conf": round(d["confidence"], 3),
+           "box": [int(round(v)) for v in d["box"]]}
+    if "id" in d:
+        out["id"] = d["id"]
+    if "frame" in d:
+        out["frame"] = d["frame"] + 1
+    if "imgsz" in d:
+        out["imgsz"] = d["imgsz"]
+    return out
+
+
+def by_class(dets):
+    return dict(Counter(cname(d["class_id"]) for d in dets))
 
 
 # ==================================================
@@ -220,6 +270,7 @@ def calculate_iou(box_a, box_b):
 
 
 def calculate_sharpness(frame):
+    """(legacy) Laplacian var tren vung giua 70% anh - KHONG trung ROI that, va bi nhieu/nen tang diem."""
     h, w = frame.shape[:2]
     roi = frame[int(h * .15):int(h * .85), int(w * .15):int(w * .85)]
     gray = cv2.GaussianBlur(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), (3, 3), 0)
@@ -227,9 +278,52 @@ def calculate_sharpness(frame):
 
 
 def select_best_frame(frames):
+    """(legacy v2/v3)"""
     scores = [calculate_sharpness(f) for f in frames]
     idx = max(range(len(scores)), key=lambda i: scores[i])
     log(f"[FRAME SELECT] scores={[round(v, 2) for v in scores]} selected={idx + 1}/{len(frames)}")
+    return frames[idx], idx, scores
+
+
+# ---------- v4: chat luong frame + phat hien frame lap / chuyen dong ----------
+def frame_quality(frame):
+    """Chat luong tren DUNG vung ROI: do net (Laplacian tren anh thu nho 0.5x de bot nhay cam voi nhieu nen),
+    do sang, tuong phan, ti le chay sang/chay toi."""
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = get_roi_px(w, h)
+    g = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(g, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+    return {"sharp": float(cv2.Laplacian(small, cv2.CV_64F).var()),
+            "brightness": float(g.mean()), "contrast": float(g.std()),
+            "clip_hi": float((g >= 250).mean()), "clip_lo": float((g <= 5).mean())}
+
+
+def frame_signature(frame):
+    """Anh xam ROI thu nho ~320px dung de so sanh frame (lap / chuyen dong)."""
+    if np is None:
+        return None
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = get_roi_px(w, h)
+    g = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    g = cv2.resize(g, (320, max(1, int(320 * g.shape[0] / g.shape[1]))), interpolation=cv2.INTER_AREA)
+    return g.astype(np.float32)
+
+
+def signature_diff(a, b):
+    return float(np.mean(np.abs(a - b)))
+
+
+def select_best_frame_v4(frames, quality):
+    """Diem = do net (chuan hoa theo trung vi) - phat do lech sang - phat chay sang/toi.
+    Frame nay CHI de hien thi / shape-check; moi quyet dinh dem deu dung bang chung cua TAT CA frame."""
+    med_s = sorted(q["sharp"] for q in quality)[len(quality) // 2]
+    med_b = sorted(q["brightness"] for q in quality)[len(quality) // 2]
+    scores = []
+    for q in quality:
+        pen = abs(q["brightness"] - med_b) / max(med_b, 1.0) + 5.0 * (q["clip_hi"] + q["clip_lo"])
+        scores.append(q["sharp"] / max(med_s, 1e-6) - pen)
+    idx = max(range(len(scores)), key=lambda i: (round(scores[i], 3), -i))
+    log(f"[FRAME SELECT v4] quality={[round(v, 3) for v in scores]} selected={idx + 1}/{len(frames)}")
     return frames[idx], idx, scores
 
 
@@ -285,7 +379,7 @@ def deduplicate(detections, threshold=DEDUP_IOU, log_list=None, stage="dedup"):
     return kept
 
 
-# ---------- v3: geometry-aware dedup ----------
+# ---------- geometry-aware dedup ----------
 def pair_metrics(a, b):
     """(iou, khoang cach tam chuan hoa theo duong cheo nho nhat, ti le dien tich nho/lon)."""
     iou = calculate_iou(a, b)
@@ -299,7 +393,7 @@ def pair_metrics(a, b):
 def looks_like_two_objects(frame, a, b):
     """Vung hop cua 2 box co hinh chu X / nhieu vat khong? (minAreaRect fill thap).
     CHI dung lam 'phu quyet dedup' cho cap box gan nhu trung nhau, nen sai so nghieng ve giu lai
-    (va phien dem bi gan co review 'kept_overlap_pair')."""
+    (va phien dem bi gan co review 'kept_overlap_pair'). v4: cluster co co nay chi duoc la 'cho xac minh'."""
     if frame is None or np is None:
         return False
     h, w = frame.shape[:2]
@@ -331,7 +425,7 @@ def geo_dedup(dets, frame=None, log_list=None, stage="geo_dedup"):
             iou, cd, size = pair_metrics(d["box"], k["box"])
             if d["class_id"] == k["class_id"]:
                 dup = iou >= DUP_IOU_SAME and cd <= DUP_CDIST and size >= DUP_SIZE
-                if dup and looks_like_two_objects(frame, d["box"], k["box"]):
+                if dup and OVERLAP_VETO and looks_like_two_objects(frame, d["box"], k["box"]):
                     dup = False
                     d["kept_overlap_pair"] = True
                     k["kept_overlap_pair"] = True
@@ -349,6 +443,7 @@ def geo_dedup(dets, frame=None, log_list=None, stage="geo_dedup"):
 
 
 def predict_frame(frame, cfg, dropped, frame_index=0):
+    t0 = time.perf_counter()
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = get_roi_px(w, h)
     crop = frame[y1:y2, x1:x2]
@@ -361,9 +456,12 @@ def predict_frame(frame, cfg, dropped, frame_index=0):
         kw.update(E2E_KW)
     result = model.predict(**kw)[0]
     raw = get_detections(result)
-    for det in raw:  # crop -> frame goc
+    # thu tu on dinh -> det id on dinh giua cac lan chay
+    raw.sort(key=lambda d: (-d["confidence"], d["box"][1], d["box"][0]))
+    for k, det in enumerate(raw, 1):  # crop -> frame goc
         bx1, by1, bx2, by2 = det["box"]
         det["box"] = [bx1 + x1, by1 + y1, bx2 + x1, by2 + y1]
+        det["id"], det["frame"], det["imgsz"] = f"F{frame_index + 1}-{k}", frame_index, imgsz
     local_drop = []
     if cfg.get("geo"):
         kept = geo_dedup(raw, frame, local_drop, f"frame{frame_index + 1}_geo")
@@ -371,8 +469,10 @@ def predict_frame(frame, cfg, dropped, frame_index=0):
         kept = deduplicate(raw, log_list=local_drop, stage=f"frame{frame_index + 1}_dedup")
     dropped.extend(local_drop)
     info = {"raw": len(raw), "kept": len(kept), "imgsz": imgsz,
+            "raw_by_class": by_class(raw), "kept_by_class": by_class(kept),
             "low_conf": sum(1 for d in kept if d["confidence"] < CONFIDENCE),
-            "dets": [brief(d) for d in kept] if DEBUG else None}
+            "t": round(time.perf_counter() - t0, 3),
+            "dets": [brief(d) for d in kept] if (DEBUG or cfg.get("stable")) else None}
     return kept, info
 
 
@@ -528,7 +628,7 @@ def merge_detections_v2(frame_detections, cfg, dropped):
     return deduplicate(merged, log_list=dropped, stage="post_merge_dedup")
 
 
-# ---------- v3: Hungarian + chi phi hinh hoc ----------
+# ---------- v3: Hungarian + chi phi hinh hoc (GIU NGUYEN de so sanh A/B) ----------
 def match_cost(det, ref):
     """Chi phi ghep 1 detection voi 1 cum (box tham chieu = trung binh). None = khong the ghep.
     Class khac chi bi PHAT mem (khong chan cung)."""
@@ -599,7 +699,7 @@ def _finalize_track(obs, status):
     votes = defaultdict(float)
     for d in obs:
         votes[d["class_id"]] += d["confidence"]
-    chosen = max(votes, key=votes.get)
+    chosen = max(votes, key=lambda k: (votes[k], -k))
     selected = [d for d in obs if d["class_id"] == chosen]
     return {
         "box": [sum(d["box"][j] for d in selected) / len(selected) for j in range(4)],
@@ -610,10 +710,137 @@ def _finalize_track(obs, status):
         "class_share": votes[chosen] / sum(votes.values()),
         "votes": {cname(k): round(v, 3) for k, v in votes.items()},
         "kept_overlap_pair": any(d.get("kept_overlap_pair") for d in obs),
+        "frame_idx": sorted({d["frame"] for d in obs if d.get("frame") is not None}),
     }
 
 
-# ---------- v3: re-inference vung nghi ngo ----------
+# ---------- v4: ghep cho vat dung yen + xac nhan theo so frame ----------
+def match_cost_v4(det, ref):
+    """Vat dung yen => cung 1 vat thi box gan nhu trung nhau o moi frame. Cong cung:
+    - dien tich phai tuong duong (>= MATCH_MIN_SIZE)
+    - cung class: IoU >= MATCH_MIN_IOU ; khac class: IoU >= MATCH_MIN_IOU_CROSS (gan nhu cung 1 vat,
+      chi la model lat nut<->washer). Hai vat khac class ke nhau co IoU thap nen khong bi ghep."""
+    iou, cd, size = pair_metrics(det["box"], ref["box"])
+    same = det["class_id"] == ref["class_id"]
+    if size < MATCH_MIN_SIZE or iou < (MATCH_MIN_IOU if same else MATCH_MIN_IOU_CROSS):
+        return None
+    return (1 - iou) + 0.5 * cd + 0.3 * (1 - size) + (0.0 if same else 0.4)
+
+
+def classify_cluster(obs, nframes):
+    """Quyet dinh trang thai tu BANG CHUNG NHIEU FRAME (v3 dung max conf cua 1 frame bat ky -> 1 box ma
+    co conf 0.5 o dung 1 frame cung 'da xac nhan'; con vat that conf~0.45 o ca 5 frame thi bi loai)."""
+    n = len({o.get("frame") for o in obs})
+    confs = [o["confidence"] for o in obs]
+    mx, mean = max(confs), sum(confs) / len(confs)
+    need = max(2, math.ceil(round(MIN_CONFIRM_FRAC * nframes, 6)))
+    if n >= need and mean >= CONFIDENCE:
+        return "confirmed", f"seen {n}/{nframes} frames (>= {need}), mean_conf={mean:.2f} >= {CONFIDENCE}"
+    if n >= RECOVER_MIN_OBS and mean >= RECOVER_MIN_MEAN:
+        return "recovered", f"stable_low_conf: seen {n}/{nframes}, mean_conf={mean:.2f} in [{RECOVER_MIN_MEAN},{CONFIDENCE})"
+    if mx >= CONFIDENCE:
+        return "recovered", f"weak_support: seen only {n}/{nframes} frames, max_conf={mx:.2f}"
+    return None, f"unconfirmed: seen {n}/{nframes}, max_conf={mx:.2f}<{CONFIDENCE}, mean={mean:.2f}"
+
+
+def merge_detections_v4(frame_dets, cfg, dropped, nframes):
+    """Tra ve (merged, trace). Hungarian 1-1 moi frame (cluster khong nhan 2 detection cung frame),
+    cost matrix cung cho vat dung yen, trang thai theo so frame, va dedup sau ghep dua tren
+    'dong xuat hien': 2 cluster tung xuat hien CUNG 1 frame la 2 vat khac nhau (detector da thay ca hai)."""
+    clusters, matching = [], []
+    for fi, dets in enumerate(frame_dets):
+        dets = sorted(dets, key=lambda d: ((d["box"][1] + d["box"][3]) / 2, (d["box"][0] + d["box"][2]) / 2))
+        n_before = len(clusters)
+        matched, C = {}, None
+        if n_before and dets and np is not None:
+            C = np.full((len(dets), n_before), _BIG)
+            for i, d in enumerate(dets):
+                for j, c in enumerate(clusters):
+                    cost = match_cost_v4(d, c)
+                    if cost is not None and cost <= MATCH_MAX_COST:
+                        C[i, j] = cost
+            for i, j in _assign(C):
+                if C[i, j] < _BIG:
+                    matched[i] = j
+        flog = {"frame": fi + 1, "matches": [], "new_clusters": [], "missed_clusters": []}
+        seen = set()
+        for i, d in enumerate(dets):
+            if i in matched:
+                j = matched[i]
+                c = clusters[j]
+                c["obs"].append(d)
+                n = len(c["obs"])
+                c["box"] = [sum(o["box"][k] for o in c["obs"]) / n for k in range(4)]
+                votes = defaultdict(float)
+                for o in c["obs"]:
+                    votes[o["class_id"]] += o["confidence"]
+                c["class_id"] = max(votes, key=lambda k: (votes[k], -k))
+                seen.add(j)
+                flog["matches"].append({"det": d.get("id"), "cluster": c["id"], "cost": round(float(C[i, j]), 3)})
+            else:
+                cid = f"C{len(clusters) + 1}"
+                clusters.append({"id": cid, "obs": [d], "box": list(d["box"]), "class_id": d["class_id"]})
+                flog["new_clusters"].append({"det": d.get("id"), "cluster": cid})
+        flog["missed_clusters"] = [clusters[j]["id"] for j in range(n_before) if j not in seen]
+        matching.append(flog)
+
+    merged, info = [], {}
+    for c in clusters:
+        obs = c["obs"]
+        status, reason = classify_cluster(obs, nframes)
+        info[c["id"]] = {
+            "id": c["id"], "class": cname(c["class_id"]), "status": "rejected" if status is None else
+            ("confirmed" if status == "confirmed" else "pending"), "reason": reason,
+            "frames": sorted({o["frame"] + 1 for o in obs if o.get("frame") is not None}),
+            "box": [int(round(v)) for v in c["box"]],
+            "obs": [{"det": o.get("id"), "frame": o.get("frame", 0) + 1, "class": cname(o["class_id"]),
+                     "conf": round(o["confidence"], 3), "imgsz": o.get("imgsz"),
+                     "box": [int(round(v)) for v in o["box"]]} for o in obs]}
+        if status is None:
+            dropped.append({"stage": "merge", "reason": reason, "cluster": c["id"],
+                            "dropped": brief(max(obs, key=lambda o: o["confidence"]))})
+            continue
+        t = _finalize_track(obs, status)
+        t.update(id=c["id"], reason=reason)
+        info[c["id"]]["votes"] = t["votes"]
+        info[c["id"]]["class_share"] = round(t["class_share"], 3)
+        merged.append(t)
+
+    # dedup sau ghep: near-identical chi bi loai neu 2 cluster KHONG BAO GIO cung xuat hien trong 1 frame
+    order = sorted(merged, key=lambda x: (x["status"] != "confirmed", -x["confidence"], x["id"]))
+    kept = []
+    for d in order:
+        drop = None
+        for k in kept:
+            iou, cd, size = pair_metrics(d["box"], k["box"])
+            if d["class_id"] == k["class_id"]:
+                dup = iou >= DUP_IOU_SAME and cd <= DUP_CDIST and size >= DUP_SIZE
+            else:
+                dup = iou >= DUP_IOU_CROSS
+            if not dup:
+                continue
+            if set(d["frame_idx"]) & set(k["frame_idx"]):      # cung 1 frame -> 2 vat khac nhau
+                d["kept_overlap_pair"] = k["kept_overlap_pair"] = True
+            else:
+                drop = (k, iou)
+                break
+        if drop is None:
+            kept.append(d)
+        else:
+            why = f"near_identical_never_cooccur iou={drop[1]:.2f} kept={drop[0]['id']}"
+            dropped.append({"stage": "post_merge_dedup", "reason": why, "cluster": d["id"],
+                            "dropped": {"class": cname(d["class_id"]), "conf": round(d["confidence"], 3),
+                                        "box": [int(round(v)) for v in d["box"]]}})
+            info[d["id"]].update(status="rejected", reason=why)
+    kept.sort(key=lambda x: int(x["id"][1:]))
+    for d in kept:                                 # vat nghi ngo chong lap khong bao gio tu 'da xac nhan'
+        if d.get("kept_overlap_pair") and d["status"] == "confirmed":
+            d["status"], d["reason"] = "recovered", "overlap_pair_needs_check; " + d["reason"]
+            info[d["id"]].update(status="pending", reason=d["reason"])
+    return kept, {"matching": matching, "info": info}
+
+
+# ---------- v3: re-inference vung nghi ngo (GIU NGUYEN) ----------
 def refine_suspects(frame, merged, cfg, dropped):
     """Box screw to bat thuong (nghi 2 vit bi gop) -> chay lai YOLO tren vung crop phong lon.
     Neu detector tu tach duoc >=2 screw conf>=CONFIDENCE thi thay the, nhung danh dau
@@ -662,6 +889,71 @@ def refine_suspects(frame, merged, cfg, dropped):
     return out
 
 
+def _refine_one(frame, d, cfg):
+    """Chay lai YOLO tren crop quanh 1 box nghi ngo cua 1 frame -> list screw conf>=CONFIDENCE, tam nam trong box."""
+    x1, y1, x2, y2 = d["box"]
+    H, W = frame.shape[:2]
+    pad = 0.15 * max(x2 - x1, y2 - y1)
+    cx1, cy1 = max(0, int(x1 - pad)), max(0, int(y1 - pad))
+    cx2, cy2 = min(W, int(x2 + pad)), min(H, int(y2 + pad))
+    if cx2 - cx1 < 8 or cy2 - cy1 < 8:
+        return []
+    r = model.predict(frame[cy1:cy2, cx1:cx2], conf=cfg["conf_infer"], imgsz=REFINE_IMGSZ,
+                      max_det=50, verbose=False, **E2E_KW)[0]
+    subs = get_detections(r)
+    for s in subs:
+        s["box"] = [s["box"][0] + cx1, s["box"][1] + cy1, s["box"][2] + cx1, s["box"][3] + cy1]
+    subs = geo_dedup([s for s in subs if cname(s["class_id"]) == "screw"], None)
+    return sorted((s for s in subs if s["confidence"] >= CONFIDENCE
+                   and x1 <= (s["box"][0] + s["box"][2]) / 2 <= x2
+                   and y1 <= (s["box"][1] + s["box"][3]) / 2 <= y2), key=lambda s: s["box"][0])
+
+
+def refine_suspects_v4(frames, merged, cfg, dropped, rtrace, info):
+    """Nhu refine_suspects nhung chay tren MOI frame ma cluster nghi ngo xuat hien va chi tach khi da so
+    frame dong y cung so luong >=2 (v3 chay tren 'best frame' - frame nay doi theo nhieu -> ket qua dao dong)."""
+    if not cfg.get("refine"):
+        return merged
+    areas = sorted((d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1])
+                   for d in merged if cname(d["class_id"]) == "screw")
+    if len(areas) < 3:
+        return merged
+    med = areas[len(areas) // 2]
+    out, n_ref = [], 0
+    for d in merged:
+        area = (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1])
+        if cname(d["class_id"]) != "screw" or area <= SUSPECT_AREA_K * med or n_ref >= MAX_REFINE:
+            out.append(d)
+            continue
+        n_ref += 1
+        runs = [(fi, _refine_one(frames[fi], d, cfg)) for fi in (d.get("frame_idx") or [0])]
+        counts = [len(s) for _, s in runs]
+        mode = max(set(counts), key=lambda c: (counts.count(c), -c))      # hoa -> chon so nho (than trong)
+        agree = [r for r in runs if len(r[1]) == mode]
+        ok = mode >= 2 and len(agree) * 2 > len(runs)
+        rtrace.append({"cluster": d["id"], "box": [int(round(v)) for v in d["box"]],
+                       "per_frame_split_counts": {fi + 1: len(s) for fi, s in runs},
+                       "mode": mode, "agree": f"{len(agree)}/{len(runs)}", "accepted": ok})
+        if not ok:
+            out.append(d)
+            continue
+        fi_best, subs = max(agree, key=lambda r: sum(s["confidence"] for s in r[1]))
+        kids = []
+        for k, s in enumerate(subs, 1):
+            sid = f"{d['id']}.{k}"
+            s.update(status="recovered", observations=len(agree), class_share=1.0, from_refine=True,
+                     votes={"screw": round(s["confidence"], 3)}, id=sid, frame_idx=[fi_best],
+                     reason=f"refine_split_{mode}: consensus {len(agree)}/{len(runs)} frames")
+            info[sid] = {"id": sid, "class": "screw", "status": "pending", "reason": s["reason"],
+                         "frames": [fi_best + 1], "box": [int(round(v)) for v in s["box"]], "obs": []}
+            kids.append(sid)
+            out.append(s)
+        info[d["id"]].update(status="replaced_by_refine", reason=f"split into {kids}")
+        dropped.append({"stage": "refine", "reason": f"split_into_{mode}", "cluster": d["id"], "dropped": brief(d)})
+        log(f"[REFINE v4] {d['id']} tach thanh {mode} screw (dong thuan {len(agree)}/{len(runs)} frame, cho xac minh)")
+    return out
+
+
 def review_reasons_for_session(frame_detections, merged_before_shape, merged_after_shape):
     reasons = []
     frame_counts = [len(dets) for dets in frame_detections]
@@ -697,10 +989,11 @@ def review_reasons_for_session(frame_detections, merged_before_shape, merged_aft
     return reasons
 
 
-def run_counting_pipeline(frames, cfg=None):
+def run_counting_pipeline(frames, cfg=None, capture=None):
     """Pipeline thuan (khong dung camera/Flask) -> dung chung cho app va cac script offline."""
     cfg = cfg or make_cfg()
-    dropped, per_frame, frame_dets = [], [], []
+    stable = bool(cfg.get("stable"))
+    dropped, per_frame, frame_dets, timing = [], [], [], {}
     t0 = time.perf_counter()
     for i, frame in enumerate(frames):
         dets, info = predict_frame(frame, cfg, dropped, frame_index=i)
@@ -709,16 +1002,36 @@ def run_counting_pipeline(frames, cfg=None):
         log(f"[FRAME {i + 1}/{len(frames)}] imgsz={info['imgsz']} raw={info['raw']} "
             f"after_dedup={info['kept']} below_{CONFIDENCE}={info['low_conf']}")
     t_infer = time.perf_counter() - t0
+    timing["infer"] = round(t_infer, 3)
 
-    best_frame, best_index, scores = select_best_frame(frames)   # can truoc khi ghep (geo-dedup dung anh)
-
-    if cfg["legacy_merge"]:
-        merged = merge_detections_legacy(frame_dets, dropped)
-    elif cfg.get("hungarian"):
-        merged = merge_detections_v3(frame_dets, cfg, dropped, best_frame)
+    t = time.perf_counter()
+    quality = [frame_quality(f) for f in frames]
+    if stable:
+        best_frame, best_index, _ = select_best_frame_v4(frames, quality)
+        sharp = [q["sharp"] for q in quality]
     else:
-        merged = merge_detections_v2(frame_dets, cfg, dropped)
-    merged = refine_suspects(best_frame, merged, cfg, dropped)
+        best_frame, best_index, sharp = select_best_frame(frames)   # can truoc khi ghep (geo-dedup dung anh)
+    timing["quality_select"] = round(time.perf_counter() - t, 3)
+
+    mtrace, rtrace = None, []
+    t = time.perf_counter()
+    if stable:
+        merged, mtrace = merge_detections_v4(frame_dets, cfg, dropped, len(frames))
+        timing["merge"] = round(time.perf_counter() - t, 3)
+        t = time.perf_counter()
+        merged = refine_suspects_v4(frames, merged, cfg, dropped, rtrace, mtrace["info"])
+        timing["refine"] = round(time.perf_counter() - t, 3)
+    else:
+        if cfg["legacy_merge"]:
+            merged = merge_detections_legacy(frame_dets, dropped)
+        elif cfg.get("hungarian"):
+            merged = merge_detections_v3(frame_dets, cfg, dropped, best_frame)
+        else:
+            merged = merge_detections_v2(frame_dets, cfg, dropped)
+        timing["merge"] = round(time.perf_counter() - t, 3)
+        t = time.perf_counter()
+        merged = refine_suspects(best_frame, merged, cfg, dropped)
+        timing["refine"] = round(time.perf_counter() - t, 3)
 
     n_rec = sum(1 for d in merged if d.get("status") == "recovered")
     log(f"[MERGE] profile={cfg['name']} tracks_final={len(merged)} recovered={n_rec} "
@@ -727,10 +1040,29 @@ def run_counting_pipeline(frames, cfg=None):
         for item in dropped:
             log(f"[DROP] {item['stage']} {item['reason']} {item['dropped']}")
 
+    t = time.perf_counter()
     baseline = [dict(d) for d in merged]
     final = apply_shape_check(best_frame, merged, cfg)
     reasons = review_reasons_for_session(frame_dets, baseline, final)
-    # tong phat hien = da xac nhan (tu dong) + cho xac minh (conf thap / tach tu refine, can nguoi kiem tra).
+    timing["shape_review"] = round(time.perf_counter() - t, 3)
+
+    # ---- v4: canh bao chat luong thu frame ----
+    frame_diffs = None
+    if stable:
+        sigs = [frame_signature(f) for f in frames]
+        if all(s is not None for s in sigs):
+            frame_diffs = [round(signature_diff(sigs[i], sigs[i + 1]), 4) for i in range(len(sigs) - 1)]
+            if any(d < 1e-6 for d in frame_diffs):
+                reasons.append(f"duplicate_frames:{frame_diffs}")
+            if any(d > MOTION_MAX for d in frame_diffs):
+                reasons.append(f"motion_between_frames:{frame_diffs}")
+        bs = [q["brightness"] for q in quality]
+        bmed = sorted(bs)[len(bs) // 2]
+        if bmed > 0 and max(abs(b - bmed) for b in bs) / bmed > EXPOSURE_DRIFT:
+            reasons.append(f"exposure_drift:{[round(b, 1) for b in bs]}")
+        if capture:
+            reasons += [f"capture:{f}" for f in capture.get("flags", [])]
+
     counts = Counter(cname(d["class_id"]) for d in final)
     counts_confirmed = Counter(cname(d["class_id"]) for d in final if d.get("status") != "recovered")
     counts_pending = Counter(cname(d["class_id"]) for d in final if d.get("status") == "recovered")
@@ -738,12 +1070,28 @@ def run_counting_pipeline(frames, cfg=None):
     log(f"[COMPARE] YOLO+merge: {dict(Counter(cname(d['class_id']) for d in baseline))}")
     log(f"[COUNT] total={len(final)} confirmed={len(final) - n_pending} pending={n_pending} "
         f"by_class={dict(counts)} pending_by_class={dict(counts_pending)}")
+    timing["total"] = round(time.perf_counter() - t0, 3)
+
+    trace = None
+    if stable:
+        trace = {
+            "capture": capture,
+            "frame_quality": [{k: round(v, 4) for k, v in q.items()} for q in quality],
+            "frame_diffs": frame_diffs, "best_frame": best_index + 1,
+            "frames": [{"frame": i + 1, **{k: v for k, v in inf.items()}} for i, inf in enumerate(per_frame)],
+            "matching": mtrace["matching"],
+            "clusters": list(mtrace["info"].values()),
+            "refine": rtrace,
+            "dropped": dropped,
+            "timing_s": timing,
+        }
     return {"cfg": cfg, "merged": final, "baseline": baseline, "best_frame": best_frame,
-            "best_index": best_index, "sharpness": scores, "frame_detections": frame_dets,
+            "best_index": best_index, "sharpness": sharp, "frame_detections": frame_dets,
             "per_frame": per_frame, "dropped": dropped, "reasons": reasons,
             "counts": counts, "counts_confirmed": counts_confirmed, "counts_pending": counts_pending,
             "total": len(final), "confirmed": len(final) - n_pending, "pending": n_pending,
-            "t_infer": t_infer, "t_total": time.perf_counter() - t0}
+            "t_infer": t_infer, "t_total": timing["total"], "timing": timing,
+            "quality": quality, "trace": trace, "capture": capture}
 
 
 # ---------- chu tieng Viet tren anh ket qua ----------
@@ -817,7 +1165,8 @@ def pending_items(merged):
         if d.get("status") == "recovered":
             items.append({"index": len(items) + 1, "class": cname(d["class_id"]),
                           "conf": round(d["confidence"], 3), "obs": d.get("observations"),
-                          "box": [int(round(v)) for v in d["box"]]})
+                          "box": [int(round(v)) for v in d["box"]],
+                          "id": d.get("id"), "reason": d.get("reason")})
     return items
 
 
@@ -854,26 +1203,66 @@ def annotate_result(frame, merged, res):
     return annotated, lines
 
 
+def save_debug_images(ddir, frames, res):
+    """(DEBUG, v4) dets_F<n>.jpg: moi detection sau dedup kem id; cluster_map.jpg: cluster + trang thai
+    (xanh = da xac nhan, cam = cho xac minh, do = bi loai) tren frame tot nhat."""
+    tr = res.get("trace")
+    if not tr:
+        return
+    for i, fr in enumerate(frames):
+        img = fr.copy()
+        k = max(1.0, img.shape[1] / 1920.0)
+        for d in res["frame_detections"][i]:
+            x1, y1, x2, y2 = [int(round(v)) for v in d["box"]]
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 200, 0), max(1, int(round(2 * k))))
+            cv2.putText(img, f"{d['id']} {d['confidence']:.2f}", (x1, max(12, y1 - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45 * k, (255, 200, 0), max(1, int(round(k))))
+        cv2.imwrite(str(ddir / f"dets_F{i + 1}.jpg"), img)
+    img = res["best_frame"].copy()
+    k = max(1.0, img.shape[1] / 1920.0)
+    colors = {"confirmed": (0, 255, 0), "pending": PENDING_BGR, "rejected": (0, 0, 255)}
+    for c in tr["clusters"]:
+        if c["status"] not in colors:
+            continue
+        x1, y1, x2, y2 = c["box"]
+        cv2.rectangle(img, (x1, y1), (x2, y2), colors[c["status"]], max(1, int(round(2 * k))))
+        cv2.putText(img, f"{c['id']} n={len(c['frames'])}", (x1, max(12, y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5 * k, colors[c["status"]], max(1, int(round(k))))
+    cv2.imwrite(str(ddir / "cluster_map.jpg"), img)
+
+
 def build_report(res, filename, frame_shape):
     h, w = frame_shape[:2]
     x1, y1, x2, y2 = get_roi_px(w, h)
     cfg = res["cfg"]
+    tr = res.get("trace")
     report = {
         "result_filename": filename, "time": datetime.now().isoformat(timespec="seconds"),
         "profile": cfg["name"], "params": {k: cfg[k] for k in cfg},
-        "e2e_kwargs": E2E_KW,
+        "e2e_kwargs": E2E_KW, "e2e_info": E2E_INFO,
         "confidence_final": CONFIDENCE, "dedup_iou": DEDUP_IOU, "merge_iou": IOU_THRESHOLD,
         "geo_dedup": {"iou_same": DUP_IOU_SAME, "cdist": DUP_CDIST, "size": DUP_SIZE,
-                      "iou_cross": DUP_IOU_CROSS, "fill_x_max": FILL_X_MAX},
+                      "iou_cross": DUP_IOU_CROSS, "fill_x_max": FILL_X_MAX, "overlap_veto": OVERLAP_VETO},
+        "match_v4": {"min_iou": MATCH_MIN_IOU, "min_iou_cross": MATCH_MIN_IOU_CROSS,
+                     "min_size": MATCH_MIN_SIZE, "max_cost": MATCH_MAX_COST,
+                     "confirm_frac": MIN_CONFIRM_FRAC},
         "roi_px": [x1, y1, x2, y2], "frame_size": [w, h],
         "counts": dict(res["counts"]), "counts_confirmed": dict(res["counts_confirmed"]),
         "counts_pending": dict(res["counts_pending"]),
         "total": res["total"], "confirmed": res["confirmed"], "pending": res["pending"],
+        "rejected_count": sum(1 for c in tr["clusters"] if c["status"] == "rejected") if tr else None,
         "pending_items": pending_items(res["merged"]),
+        # pending_weak = chi 1-2 frame ung ho / nghi chong lap; core_total = total - pending_weak (chi so on dinh de theo doi)
+        "pending_weak": sum(1 for d in res["merged"] if d.get("status") == "recovered"
+                            and str(d.get("reason", "")).startswith(("weak_support", "overlap_pair", "refine_split"))),
+        "core_total": res["total"] - sum(1 for d in res["merged"] if d.get("status") == "recovered"
+                                         and str(d.get("reason", "")).startswith(("weak_support", "overlap_pair", "refine_split"))),
         "sharpness": [round(s, 2) for s in res["sharpness"]], "best_frame": res["best_index"] + 1,
-        "timing_s": {"infer": round(res["t_infer"], 3), "total": round(res["t_total"], 3)},
+        "timing_s": {"infer": round(res["t_infer"], 3), "total": round(res["t_total"], 3), **res.get("timing", {})},
         "review_reasons": res["reasons"],
         "objects": [{**brief(d), "status": d.get("status"), "obs": d.get("observations"),
+                     "id": d.get("id"), "reason": d.get("reason"),
+                     "frames": [f + 1 for f in d.get("frame_idx", [])],
                      "class_share": round(d.get("class_share", 1.0), 3), "votes": d.get("votes"),
                      "original_class": d.get("original_class"), "shape": d.get("shape"),
                      "shape_changed_class": d.get("shape_changed_class", False),
@@ -883,7 +1272,9 @@ def build_report(res, filename, frame_shape):
         "per_frame": [{k: v for k, v in i.items() if k != "dets"} for i in res["per_frame"]],
         "dropped_count": len(res["dropped"]),
     }
-    if DEBUG:
+    if tr:                                   # v4: truy vet day du, LUON ghi (khong phu thuoc DEBUG)
+        report["trace"] = tr
+    elif DEBUG:
         report["debug"] = {"dropped": res["dropped"],
                            "per_frame_dets": [i["dets"] for i in res["per_frame"]]}
     return report
@@ -923,7 +1314,7 @@ def save_review_pair(raw_frame, result_path):
     return raw_path, annotated_path
 
 
-def process_count_session(frames, current_session_id):
+def process_count_session(frames, current_session_id, capture=None):
     global session_state, session_message
     global latest_counts, latest_total, latest_detections, latest_recovered
     global latest_result_path, latest_result_filename
@@ -932,7 +1323,7 @@ def process_count_session(frames, current_session_id):
     try:
         if not frames:
             raise RuntimeError("Khong thu thap duoc frame.")
-        res = run_counting_pipeline(frames, make_cfg())
+        res = run_counting_pipeline(frames, make_cfg(), capture)
         merged, best_frame, counts, total = res["merged"], res["best_frame"], res["counts"], res["total"]
         annotated, lines = annotate_result(best_frame, merged, res)
 
@@ -950,13 +1341,19 @@ def process_count_session(frames, current_session_id):
 
         report = build_report(res, filename, best_frame.shape)
         try:
-            output_path.with_suffix(".json").write_text(
-                json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+            ddir = None
             if DEBUG:
                 ddir = DEBUG_DIR / f"session_{current_session_id}_{datetime.now():%Y%m%d_%H%M%S}"
                 ddir.mkdir(parents=True, exist_ok=True)
+                report["debug_dir"] = str(ddir)
                 for i, fr in enumerate(frames, 1):
-                    save_raw_png(ddir / f"frame_{i}.png", fr)
+                    save_raw_png(ddir / f"frame_{i}.png", fr)    # dau vao cho tools/test_*.py
+                save_debug_images(ddir, frames, res)
+            output_path.with_suffix(".json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+            if ddir is not None:
+                (ddir / "report.json").write_text(
+                    json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
         except Exception as exc:  # log phu khong duoc lam hong phien dem
             log(f"[WARN] Khong ghi duoc JSON/debug: {exc}")
 
@@ -999,7 +1396,7 @@ def process_count_session(frames, current_session_id):
 # ==================================================
 def open_ip_camera():
     cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # luu y: backend FFmpeg co the bo qua tham so nay
     return cap
 
 
@@ -1016,7 +1413,7 @@ def camera_worker():
     global camera_enabled, camera_ready, camera_status
     global latest_frame, latest_jpeg
     global session_state, session_message
-    global sample_frames, last_sample_time
+    global sample_frames, sample_meta, sample_info, sampling_t0, prev_sig, last_sample_time
 
     cap = None
     ready_reported = False
@@ -1045,8 +1442,9 @@ def camera_worker():
                     time.sleep(RTSP_RECONNECT_DELAY)
                     continue
 
-            ok, frame = cap.read()
-            if not ok or frame is None:
+            # grab() LUON chay moi vong (giai ma + bo goi, giu do tre thap); retrieve() (chuyen mau,
+            # cap phat 1 frame day du) chi khi that su can cho preview hoac mau dem.
+            if not cap.grab():
                 cap.release()
                 cap = None
                 ready_reported = False
@@ -1067,37 +1465,72 @@ def camera_worker():
             now = time.monotonic()
             frames_to_process = None
             process_session_id = None
+            capture_info = None
             with lock:
-                latest_frame = frame  # khong copy: frame moi moi vong lap, cac noi dung can thi tu copy
                 if session_state == "countdown" and now >= countdown_deadline:
                     session_state = "sampling"
                     session_message = f"Đang lấy {SAMPLE_COUNT} frame..."
-                    sample_frames = []
-                    last_sample_time = 0.0
-                if session_state == "sampling":
-                    if not sample_frames or now - last_sample_time >= SAMPLE_INTERVAL:
-                        sample_frames.append(frame.copy())
-                        last_sample_time = now
-                    if len(sample_frames) >= SAMPLE_COUNT:
-                        frames_to_process = [item.copy() for item in sample_frames]
-                        process_session_id = session_id
-                        session_state = "processing"
-                        session_message = f"Đang chạy YOLO trên {SAMPLE_COUNT} frame và ghép kết quả..."
+                    sample_frames, sample_meta = [], []
+                    sample_info = {"restarts": 0, "duplicates": 0, "flags": []}
+                    sampling_t0, last_sample_time, prev_sig = now, 0.0, None
+                sampling = session_state == "sampling"
+                s_t0, s_last = sampling_t0, last_sample_time
+            want_preview = now - last_preview >= 1.0 / PREVIEW_FPS
+            # bo SETTLE_SECONDS dau (decoder/auto-exposure on dinh sau countdown), sau do cach nhau SAMPLE_INTERVAL
+            want_sample = (sampling and now - s_t0 >= SETTLE_SECONDS
+                           and (s_last == 0.0 or now - s_last >= SAMPLE_INTERVAL))
 
-            # Preview: gioi han PREVIEW_FPS de giam tai CPU (imencode 1080p moi frame rat ton)
-            if now - last_preview >= 1.0 / PREVIEW_FPS:
+            frame = None
+            if want_preview or want_sample:
+                ok, frame = cap.retrieve()
+                if not ok or frame is None:
+                    frame, want_sample, want_preview = None, False, False
+
+            if frame is not None:
+                sig = frame_signature(frame) if want_sample else None
+                with lock:
+                    latest_frame = frame   # khong copy: moi retrieve la mot mang moi; noi can sua thi tu copy
+                    if want_sample and session_state == "sampling":
+                        diff = None if (prev_sig is None or sig is None) else signature_diff(sig, prev_sig)
+                        motion_check = (now - sampling_t0) < SAMPLE_TIMEOUT
+                        if diff is not None and diff < 1e-6:
+                            sample_info["duplicates"] += 1            # frame lap (decoder lap lai) -> doi frame moi
+                        elif diff is not None and diff > MOTION_MAX and motion_check:
+                            sample_info["restarts"] += 1              # canh dang dong -> thu lai tu dau
+                            sample_frames, sample_meta = [], []
+                            prev_sig, last_sample_time = sig, now
+                        else:
+                            if diff is not None and diff > MOTION_MAX and "motion_timeout" not in sample_info["flags"]:
+                                sample_info["flags"].append("motion_timeout")
+                            sample_frames.append(frame)
+                            sample_meta.append({"t": round(now - sampling_t0, 3),
+                                                "diff_prev": None if diff is None else round(diff, 4)})
+                            prev_sig, last_sample_time = sig, now
+                        if len(sample_frames) >= SAMPLE_COUNT:
+                            frames_to_process = list(sample_frames)
+                            capture_info = {"frames": list(sample_meta), "settle_s": SETTLE_SECONDS,
+                                            "interval_s": SAMPLE_INTERVAL, **sample_info,
+                                            "flags": list(sample_info["flags"])}
+                            process_session_id = session_id
+                            session_state = "processing"
+                            session_message = f"Đang chạy YOLO trên {SAMPLE_COUNT} frame và ghép kết quả..."
+
+            # Preview: thu nho truoc khi encode (imencode 4K/1080p moi frame rat ton CPU)
+            if want_preview and frame is not None:
                 last_preview = now
-                preview = frame.copy()
+                ph, pw = frame.shape[:2]
+                s = min(1.0, PREVIEW_MAX_W / float(pw))
+                preview = cv2.resize(frame, (int(pw * s), int(ph * s)), interpolation=cv2.INTER_AREA) if s < 1.0 else frame.copy()
                 if USE_ROI:
-                    ph, pw = preview.shape[:2]
                     rx1, ry1, rx2, ry2 = get_roi_px(pw, ph)
-                    cv2.rectangle(preview, (rx1, ry1), (rx2 - 1, ry2 - 1), (0, 255, 0), 2, cv2.LINE_AA)
+                    sx1, sy1, sx2, sy2 = [int(round(v * s)) for v in (rx1, ry1, rx2, ry2)]
+                    cv2.rectangle(preview, (sx1, sy1), (sx2 - 1, sy2 - 1), (0, 255, 0), 2, cv2.LINE_AA)
                     label = f"ROI - YOLO AREA ({rx2 - rx1}x{ry2 - ry1}) [{PROFILE}]"
                     font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
                     (tw, th), base = cv2.getTextSize(label, font, scale, thick)
-                    ly = max(th + 10, ry1 - 8)
-                    cv2.rectangle(preview, (rx1, ly - th - 8), (rx1 + tw + 10, ly + base - 4), (0, 160, 0), -1)
-                    cv2.putText(preview, label, (rx1 + 5, ly - 3), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+                    ly = max(th + 10, sy1 - 8)
+                    cv2.rectangle(preview, (sx1, ly - th - 8), (sx1 + tw + 10, ly + base - 4), (0, 160, 0), -1)
+                    cv2.putText(preview, label, (sx1 + 5, ly - 3), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
                 ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 if ok:
                     with lock:
@@ -1105,8 +1538,8 @@ def camera_worker():
 
             if frames_to_process is not None:
                 Thread(target=process_count_session,
-                       args=(frames_to_process, process_session_id), daemon=True).start()
-            time.sleep(0.005)
+                       args=(frames_to_process, process_session_id, capture_info), daemon=True).start()
+            time.sleep(0.001)
     finally:
         if cap is not None:
             cap.release()
@@ -1217,6 +1650,7 @@ def get_counts():
         return jsonify(
             counts=latest_counts, total=latest_total, detections=latest_detections,
             confirmed=rep.get("confirmed", 0), pending=latest_recovered,
+            rejected=rep.get("rejected_count"),
             counts_confirmed=rep.get("counts_confirmed", {}),
             counts_pending=rep.get("counts_pending", {}),
             pending_items=rep.get("pending_items", []),
@@ -1231,7 +1665,7 @@ def get_counts():
 
 @app.route("/last_report")
 def last_report():
-    """Bao cao JSON phien gan nhat (ROI, tham so, tung vat the, vote, ly do loai)."""
+    """Bao cao JSON phien gan nhat (ROI, tham so, tung vat the, vote, ly do loai, trace v4)."""
     with lock:
         report = latest_report
     if report is None:
@@ -1299,8 +1733,9 @@ if __name__ == "__main__":
     log(f"[BOOT] profile={PROFILE} debug={DEBUG} imgsz={IMAGE_SIZE} scales={cfg0['scales']} "
         f"preprocess={USE_PREPROCESS} conf_infer={cfg0['conf_infer']} "
         f"shape_correct={cfg0['shape_correct']} geo={cfg0['geo']} refine={cfg0['refine']} "
-        f"e2e_kwargs={E2E_KW}")
+        f"overlap_veto={OVERLAP_VETO}")
+    log(f"[BOOT] e2e_kwargs={E2E_KW} e2e_info={E2E_INFO}")
     if cfg0["nms_free"] and not E2E_KW:
-        log("[BOOT][WARN] Khong nhan dien duoc tham so NMS-free (nms=False / end2end=True) - "
-            "v3 se chay voi che do mac dinh cua model.")
+        log("[BOOT][WARN] Khong co tham so 'end2end' trong cfg Ultralytics - dung che do mac dinh cua model. "
+            "Kiem tra e2e_info.head_end2end: True = model dang chay NMS-free; False/None = can xem lai phien ban.")
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
